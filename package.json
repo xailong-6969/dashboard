@@ -1,22 +1,19 @@
 {
-  "name": "@delphi-dashboard/indexer",
+  "name": "@delphi-dashboard/web",
   "private": true,
-  "type": "module",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
   },
   "dependencies": {
     "@prisma/client": "^5.18.0",
-    "dotenv": "^16",
-    "viem": "^2"
-  },
-  "devDependencies": {
-    "typescript": "^5",
-    "tsx": "^4"
+    "next": "^14",
+    "react": "^18",
+    "react-dom": "^18"
   },
   "engines": {
     "node": ">=20"
   }
 }
+
