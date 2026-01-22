@@ -5,6 +5,7 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
+  output   = "../apps/web/node_modules/.prisma/client"
 }
 
 model Market {
@@ -14,10 +15,8 @@ model Market {
   createdAtBlock  BigInt?
   createdAtTime   DateTime?
   modelsJson      Json?
-
   winningModelIdx BigInt?
   status          Int?
-
   trades          Trade[]
 }
 
@@ -27,19 +26,15 @@ model Trade {
   logIndex        Int
   blockNumber     BigInt
   blockTime       DateTime
-
   marketId        BigInt
   modelIdx        BigInt
   trader          String
   isBuy           Boolean
-
-  tokensDelta     Decimal  @db.Decimal(78, 0)
-  sharesDelta     Decimal  @db.Decimal(78, 0)
-
-  modelNewPrice   Decimal  @db.Decimal(78, 0)
-  modelNewSupply  Decimal  @db.Decimal(78, 0)
-  marketNewSupply Decimal  @db.Decimal(78, 0)
-
+  tokensDelta     String
+  sharesDelta     String
+  modelNewPrice   String
+  modelNewSupply  String
+  marketNewSupply String
   market          Market   @relation(fields: [marketId], references: [marketId])
 
   @@index([marketId, blockTime])
