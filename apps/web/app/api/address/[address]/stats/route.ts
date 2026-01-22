@@ -9,9 +9,9 @@ function isHexAddress(a: string) {
 
 export async function GET(
   _req: Request,
-  { params }: { params: { address: string } }
+  { params }: { params: Promise<{ address: string }> }
 ) {
-  const address = params.address;
+  const { address } = await params;
 
   if (!isHexAddress(address)) {
     return NextResponse.json({ error: "Invalid address" }, { status: 400 });
