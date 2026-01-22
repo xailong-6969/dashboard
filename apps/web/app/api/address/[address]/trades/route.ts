@@ -35,11 +35,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ address:
   });
 
   // Add implied % derived from UD60x18 price
-  const trades = rows.map((r) => {
-    const priceRaw = BigInt(r.modelNewPrice.toString());
-    const impliedPct = Number(priceRaw) / 1e16; // (price/1e18)*100
-    return { ...r, impliedPct };
-  });
+const trades = rows.map((r: typeof rows[number]) => {
+  const priceRaw = BigInt(r.modelNewPrice.toString());
+  const impliedPct = Number(priceRaw) / 1e16; // (price/1e18)*100
+  return { ...r, impliedPct };
+});
+  
 
   return NextResponse.json({ address, take, skip, trades });
 }
