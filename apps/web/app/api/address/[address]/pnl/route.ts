@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import { createPublicClient, http, getAddress } from "viem";
-import delphiAbi from "@/lib/delphi.abi.json"; // put ABI here (or re-export from packages)
+import delphiAbi from "@/lib/delphi.abi.json";
+
 const prisma = new PrismaClient();
 
 const RPC_URL = process.env.RPC_URL!;
 const DELPHI_IMPL = (process.env.DELPHI_IMPL ??
-  "0xaC46F41Df8188034Eb459Bb4c8FaEcd6EE369fdf") as `0x${string}`;
+  "0xCaC4F41Df8188034Eb459Bb4c8FaEcd6EE369fdf") as `0x${string}`;
 
 if (!RPC_URL) throw new Error("Missing RPC_URL");
 
@@ -18,14 +19,14 @@ function isHexAddress(a: string) {
   return /^0x[a-fA-F0-9]{40}$/.test(a);
 }
 
-type PositionKey = string; // `${marketId}:${modelIdx}`
+type PositionKey = string;
 
 type Position = {
   marketId: bigint;
   modelIdx: bigint;
   sharesHeld: bigint;
-  costBasis: bigint;      // tokens still tied to held shares
-  realizedPnl: bigint;    // realized tokens pnl from sells
+  costBasis: bigint;
+  realizedPnl: bigint;
 };
 
 export async function GET(
@@ -34,14 +35,13 @@ export async function GET(
 ) {
   const { address: rawAddress } = await params;
   const raw = rawAddress?.trim();
+  
   if (!raw || !isHexAddress(raw)) {
     return NextResponse.json({ error: "Invalid address" }, { status: 400 });
   }
 
-  // Normalize to checksum to match how you stored it (recommended)
   const address = getAddress(raw);
 
-  // Pull all trades for this wallet in chronological order (oldest -> newest)
   const trades = await prisma.trade.findMany({
     where: {
       OR: [{ trader: address }, { trader: address.toLowerCase() }],
@@ -58,7 +58,6 @@ export async function GET(
     },
   });
 
-  // Aggregate positions
   const positions = new Map<PositionKey, Position>();
 
   const getPos = (marketId: bigint, modelIdx: bigint) => {
@@ -71,12 +70,12 @@ export async function GET(
     return p;
   };
 
-  // Average-cost accounting
   for (const t of trades) {
     const marketId = BigInt(t.marketId.toString());
     const modelIdx = BigInt(t.modelIdx.toString());
-    const tokens = BigInt(t.tokensDelta.toString());
-    const shares = BigInt(t.sharesDelta.toString());
+    // ✅ FIXED: tokensDelta and sharesDelta are already strings
+    const tokens = BigInt(t.tokensDelta);
+    const shares = BigInt(t.sharesDelta);
 
     const p = getPos(marketId, modelIdx);
 
@@ -84,41 +83,27 @@ export async function GET(
       p.sharesHeld += shares;
       p.costBasis += tokens;
     } else {
-      // Sell: compute cost removed using average cost per share
       if (p.sharesHeld === 0n) {
-        // Edge case: sell without tracked buys (could happen if history truncated)
-        // Treat as fully realized proceeds (conservative handling)
         p.realizedPnl += tokens;
         continue;
       }
 
-      // avgCostPerShare = costBasis / sharesHeld  (integer division)
       const avgCostPerShare = p.costBasis / p.sharesHeld;
-
-      // costRemoved = avgCostPerShare * sharesSold
       const costRemoved = avgCostPerShare * shares;
-
       const proceeds = tokens;
       p.realizedPnl += proceeds - costRemoved;
-
-      // Update remaining position
       p.sharesHeld -= shares;
-
-      // Prevent underflow if rounding makes costRemoved slightly > costBasis
       p.costBasis = p.costBasis > costRemoved ? (p.costBasis - costRemoved) : 0n;
     }
   }
 
-  // Prepare open positions for unrealized PnL quoting
   const openPositions = [...positions.values()].filter((p) => p.sharesHeld > 0n);
 
-  // To protect RPC + latency, only quote top N positions by cost basis
   const MAX_QUOTES = 20;
   openPositions.sort((a, b) => (b.costBasis > a.costBasis ? 1 : -1));
   const quoted = openPositions.slice(0, MAX_QUOTES);
   const unquoted = openPositions.slice(MAX_QUOTES);
 
-  // Quote exit value for top positions
   const quoteResults: Array<{
     marketId: string;
     modelIdx: string;
@@ -135,7 +120,6 @@ export async function GET(
 
   for (const p of positions.values()) totalRealized += p.realizedPnl;
 
-  // Live exit quotes (best mark-to-market)
   for (const p of quoted) {
     totalCostBasis += p.costBasis;
 
@@ -147,7 +131,6 @@ export async function GET(
     })) as bigint;
 
     const unrealized = exitValue - p.costBasis;
-
     totalExitValue += exitValue;
     totalUnrealized += unrealized;
 
@@ -161,9 +144,6 @@ export async function GET(
     });
   }
 
-  // Fallback estimate for remaining positions (cheap approximation):
-  // exit ≈ spotPrice * sharesHeld  (note: ignores slippage; label as estimate)
-  // This keeps the endpoint fast even for active wallets.
   const estimateResults: typeof quoteResults = [];
   for (const p of unquoted) {
     totalCostBasis += p.costBasis;
@@ -175,7 +155,6 @@ export async function GET(
       args: [p.marketId, p.modelIdx],
     })) as bigint;
 
-    // spotPrice is UD60x18; exit ≈ sharesHeld * spot / 1e18
     const exitEst = (p.sharesHeld * spot) / 1_000_000_000_000_000_000n;
     const unrealizedEst = exitEst - p.costBasis;
 
@@ -207,8 +186,8 @@ export async function GET(
       estimatedPositions: unquoted.length,
     },
     positions: {
-      quoted: quoteResults,       // best accuracy (uses quoteSellExactIn)
-      estimated: estimateResults, // fast fallback (uses spotPrice)
+      quoted: quoteResults,
+      estimated: estimateResults,
     },
     notes: [
       "Realized PnL uses average-cost accounting per market/model.",
