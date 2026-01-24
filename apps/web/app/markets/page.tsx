@@ -1,10 +1,23 @@
-import Link from "next/link";
 import prisma from "@/lib/prisma";
 import { formatNumber } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-async function getMarkets() {
+interface MarketWithCount {
+  marketId: bigint;
+  configUri: string | null;
+  configUriHash: string | null;
+  createdAtBlock: bigint | null;
+  createdAtTime: Date | null;
+  modelsJson: any;
+  winningModelIdx: bigint | null;
+  status: number;
+  _count: {
+    trades: number;
+  };
+}
+
+async function getMarkets(): Promise<MarketWithCount[]> {
   try {
     const markets = await prisma.market.findMany({
       orderBy: { createdAtTime: "desc" },
@@ -35,7 +48,7 @@ export default async function MarketsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {markets.map((market) => (
+          {markets.map((market: MarketWithCount) => (
             <div key={market.marketId.toString()} className="glass rounded-2xl p-6 card-hover">
               <div className="flex items-start justify-between mb-4">
                 <div>
