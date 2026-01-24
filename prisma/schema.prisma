@@ -5,19 +5,21 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
-  // REMOVED the custom output path to fix initialization errors
 }
 
 model Market {
-  marketId        BigInt   @id
+  marketId        BigInt    @id
   configUri       String?
   configUriHash   String?
   createdAtBlock  BigInt?
   createdAtTime   DateTime?
   modelsJson      Json?
   winningModelIdx BigInt?
-  status          Int?
+  status          Int       @default(0)
   trades          Trade[]
+
+  @@index([status])
+  @@index([createdAtTime])
 }
 
 model Trade {
@@ -40,10 +42,24 @@ model Trade {
   @@index([marketId, blockTime])
   @@index([trader, blockTime])
   @@index([txHash])
+  @@index([blockTime])
+  @@index([isBuy, blockTime])
 }
 
 model IndexerState {
   id        String   @id @default("delphi")
   lastBlock BigInt
   updatedAt DateTime @updatedAt
+}
+
+model DailyStats {
+  id            String   @id
+  date          DateTime @unique
+  totalTrades   Int      @default(0)
+  totalVolume   String   @default("0")
+  uniqueTraders Int      @default(0)
+  buyCount      Int      @default(0)
+  sellCount     Int      @default(0)
+
+  @@index([date])
 }
