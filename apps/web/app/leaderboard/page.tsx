@@ -4,7 +4,15 @@ import { formatNumber, formatAddress } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-async function getLeaderboard() {
+interface TraderStats {
+  address: string;
+  trades: number;
+  volume: bigint;
+  buys: number;
+  sells: number;
+}
+
+async function getLeaderboard(): Promise<TraderStats[]> {
   try {
     const trades = await prisma.trade.findMany({
       select: {
@@ -63,7 +71,7 @@ export default async function LeaderboardPage() {
               </tr>
             </thead>
             <tbody>
-              {leaderboard.map((trader, i) => (
+              {leaderboard.map((trader: TraderStats, i: number) => (
                 <tr key={trader.address} className="border-b border-slate-800/50 hover:bg-white/5 transition-colors">
                   <td className="px-6 py-4">
                     <span className={`text-lg font-bold ${
