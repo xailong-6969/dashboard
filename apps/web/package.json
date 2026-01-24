@@ -5,8 +5,7 @@
   "scripts": {
     "dev": "next dev --port 3000",
     "build": "next build",
-    "start": "next start --port 3000",
-    "postinstall": "prisma generate --schema ../../prisma/schema.prisma"
+    "start": "next start --port 3000"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
