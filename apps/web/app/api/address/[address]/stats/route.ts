@@ -1,14 +1,20 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prisma from "@/lib/prisma";
 import { getAddress } from "viem";
 
-// Prevent Next.js from attempting to connect to the DB during build time
 export const dynamic = "force-dynamic";
 
-const prisma = new PrismaClient();
-
-function isHexAddress(a: string) {
+function isHexAddress(a: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(a);
+}
+
+interface TradeData {
+  isBuy: boolean;
+  tokensDelta: string;
+  sharesDelta: string;
+  marketId: bigint;
+  modelIdx: bigint;
+  blockTime: Date;
 }
 
 export async function GET(
@@ -22,13 +28,10 @@ export async function GET(
   }
 
   try {
-    // Normalize to checksum format to match how the indexer stores addresses
     const normalizedAddr = getAddress(address);
 
     const trades = await prisma.trade.findMany({
-      where: {
-        trader: normalizedAddr,
-      },
+      where: { trader: normalizedAddr },
       select: {
         isBuy: true,
         tokensDelta: true,
@@ -45,7 +48,6 @@ export async function GET(
     let totalTokens = 0n;
     let buyTokens = 0n;
     let sellTokens = 0n;
-
     let totalShares = 0n;
     let buyShares = 0n;
     let sellShares = 0n;
@@ -56,7 +58,7 @@ export async function GET(
     let firstSeen: Date | null = null;
     let lastSeen: Date | null = null;
 
-    for (const t of trades) {
+    for (const t of trades as TradeData[]) {
       const tok = BigInt(t.tokensDelta.toString());
       const sh = BigInt(t.sharesDelta.toString());
 
@@ -102,17 +104,17 @@ export async function GET(
       totalTokens: totalTokens.toString(),
       buyTokens: buyTokens.toString(),
       sellTokens: sellTokens.toString(),
-      netTokensProxy: netTokensProxy.toString(),
       totalShares: totalShares.toString(),
       buyShares: buyShares.toString(),
       sellShares: sellShares.toString(),
-      firstSeen,
-      lastSeen,
+      netTokensProxy: netTokensProxy.toString(),
       topMarkets,
       topModels,
+      firstSeen,
+      lastSeen,
     });
-  } catch (error) {
-    console.error("Database error in stats route:", error);
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  } catch (e) {
+    console.error("Stats API error:", e);
+    return NextResponse.json({ error: "Failed to fetch stats" }, { status: 500 });
   }
 }
