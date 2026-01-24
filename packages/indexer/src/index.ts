@@ -2,7 +2,8 @@ import "dotenv/config";
 import { createPublicClient, http, parseAbiItem, getAddress } from "viem";
 import { mainnet } from "viem/chains"; // chain object not critical if you pass RPC
 import { PrismaClient } from "@prisma/client";
-import { DELPHI_IMPL } from "@delphi-pulse/contracts/delphi";
+const DELPHI_IMPL = (process.env.DELPHI_IMPL ?? 
+  "0xCaC4F41DF8188034Eb459Bb4c8FaEcd6EE369fdf") as `0x${string}`;  // ✅ NEW
 
 const prisma = new PrismaClient();
 
