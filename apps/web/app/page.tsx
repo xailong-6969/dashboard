@@ -4,7 +4,22 @@ import { formatNumber } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-async function getStats() {
+interface RecentTrade {
+  id: string;
+  trader: string;
+  isBuy: boolean;
+  tokensDelta: string;
+  blockTime: Date;
+  marketId: bigint;
+}
+
+interface StatsData {
+  totalTrades: number;
+  totalMarkets: number;
+  recentTrades: RecentTrade[];
+}
+
+async function getStats(): Promise<StatsData> {
   try {
     const [totalTrades, totalMarkets, recentTrades] = await Promise.all([
       prisma.trade.count(),
@@ -86,7 +101,7 @@ export default async function HomePage() {
         <div className="glass rounded-2xl p-6">
           <h2 className="text-xl font-bold text-white mb-4">Recent Trades</h2>
           <div className="space-y-3">
-            {recentTrades.map((trade) => (
+            {recentTrades.map((trade: RecentTrade) => (
               <div key={trade.id} className="flex items-center justify-between py-3 border-b border-slate-800 last:border-0">
                 <div className="flex items-center gap-3">
                   <span className={`px-2 py-1 rounded text-xs font-medium ${trade.isBuy ? "bg-green-500/20 text-green-400" : "bg-red-500/20 text-red-400"}`}>
