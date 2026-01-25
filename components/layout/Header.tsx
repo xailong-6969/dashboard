@@ -20,17 +20,18 @@ export default function Header() {
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = search.trim();
-    if (trimmed && /^0x[a-fA-F0-9]{40}$/.test(trimmed)) {
+    if (trimmed && /^0x[a-fA-F0-9]{40}$/i.test(trimmed)) {
       router.push(`/address/${trimmed}`);
       setSearch("");
+    } else if (trimmed.length > 0) {
+      alert("Please enter a valid Ethereum address (0x...)");
     }
   };
 
   return (
     <header className="sticky top-0 z-50 glass border-b border-[var(--border-color)]">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="flex h-16 items-center justify-between gap-6">
-          {/* Logo */}
+        <div className="flex h-16 items-center justify-between gap-4">
           <Link href="/" className="flex items-center gap-3 group shrink-0">
             <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
               <span className="text-lg font-bold text-white">δ</span>
@@ -41,7 +42,6 @@ export default function Header() {
             </div>
           </Link>
 
-          {/* Nav */}
           <nav className="hidden md:flex items-center gap-1">
             {navItems.map((item) => (
               <Link
@@ -59,10 +59,9 @@ export default function Header() {
             ))}
           </nav>
 
-          {/* Search */}
           <form onSubmit={handleSearch} className="flex-1 max-w-md">
             <div className={cn(
-              "relative transition-all duration-200",
+              "relative flex items-center transition-all duration-200",
               isSearchFocused && "transform scale-[1.02]"
             )}>
               <input
@@ -73,23 +72,25 @@ export default function Header() {
                 onFocus={() => setIsSearchFocused(true)}
                 onBlur={() => setIsSearchFocused(false)}
                 className={cn(
-                  "w-full px-4 py-2.5 rounded-lg bg-[var(--bg-secondary)] border text-white placeholder-zinc-500 text-sm font-mono",
+                  "w-full px-4 py-2.5 pr-12 rounded-lg bg-[var(--bg-secondary)] border text-white placeholder-zinc-500 text-sm font-mono",
                   "focus:outline-none transition-all duration-200",
                   isSearchFocused 
                     ? "border-blue-500/50 ring-1 ring-blue-500/20" 
                     : "border-[var(--border-color)]"
                 )}
               />
-              <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                <kbd className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-mono text-zinc-500 bg-[var(--bg-card)] rounded border border-[var(--border-color)]">
-                  ↵
-                </kbd>
-              </div>
+              <button
+                type="submit"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-md bg-blue-600 hover:bg-blue-500 transition-colors"
+              >
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+              </button>
             </div>
           </form>
 
-          {/* External link */}
-          <a
+          
             href="https://delphi.gensyn.ai"
             target="_blank"
             rel="noopener noreferrer"
