@@ -2,96 +2,107 @@ import Link from "next/link";
 import prisma from "@/lib/prisma";
 import { formatNumber, formatTokens, formatAddress, formatTimeAgo } from "@/lib/utils";
 import StatCard from "@/components/ui/StatCard";
+import { VALID_MARKET_IDS_BIGINT, MARKETS } from "@/lib/markets-config";
 
 export const dynamic = "force-dynamic";
 
 async function getHomeData() {
   try {
-    const [
-      totalTrades,
-      totalMarkets,
-      activeMarkets,
-      settledMarkets,
-      indexerState,
-      recentTrades,
-    ] = await Promise.all([
-      prisma.trade.count(),
-      prisma.market.count(),
-      prisma.market.count({ where: { status: 0 } }),
-      prisma.market.count({ where: { status: 2 } }),
-      prisma.indexerState.findUnique({ where: { id: "delphi" } }),
-      prisma.trade.findMany({
-        take: 10,
-        orderBy: { blockTime: "desc" },
-        select: {
-          id: true,
-          trader: true,
-          isBuy: true,
-          tokensDelta: true,
-          blockTime: true,
-          marketId: true,
-          modelIdx: true,
-          impliedProbability: true,
-          market: {
-            select: { title: true },
-          },
-        },
-      }),
-    ]);
-
-    // Calculate total volume
-    const allTrades = await prisma.trade.findMany({
-      select: { tokensDelta: true },
+    // Get markets - ONLY valid markets (0, 1, 3)
+    const markets = await prisma.market.findMany({
+      where: { marketId: { in: VALID_MARKET_IDS_BIGINT } },
+      select: { marketId: true, status: true },
     });
+
+    // Count using our config (more reliable)
+    const activeMarkets = Object.values(MARKETS).filter(m => m.status === "active").length;
+    const settledMarkets = Object.values(MARKETS).filter(m => m.status === "settled").length;
+
+    // Get all trades for valid markets only
+    const allTrades = await prisma.trade.findMany({
+      where: { marketId: { in: VALID_MARKET_IDS_BIGINT } },
+      select: {
+        tokensDelta: true,
+        blockTime: true,
+        trader: true,
+      },
+    });
+
     let totalVolume = 0n;
+    const uniqueTraders = new Set<string>();
     for (const t of allTrades) {
-      totalVolume += BigInt(t.tokensDelta);
+      const tokens = BigInt(t.tokensDelta);
+      totalVolume += tokens < 0n ? -tokens : tokens;
+      uniqueTraders.add(t.trader);
     }
 
     // 24h stats
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const trades24h = await prisma.trade.findMany({
-      where: { blockTime: { gte: oneDayAgo } },
-      select: { tokensDelta: true },
-    });
     let volume24h = 0n;
-    for (const t of trades24h) {
-      volume24h += BigInt(t.tokensDelta);
+    let trades24h = 0;
+    for (const t of allTrades) {
+      if (t.blockTime && t.blockTime >= oneDayAgo) {
+        const tokens = BigInt(t.tokensDelta);
+        volume24h += tokens < 0n ? -tokens : tokens;
+        trades24h++;
+      }
     }
 
-    // Get unique traders
-    const uniqueTraders = await prisma.trade.findMany({
-      distinct: ["trader"],
-      select: { trader: true },
+    // Get recent trades (valid markets only)
+    const recentTrades = await prisma.trade.findMany({
+      where: { marketId: { in: VALID_MARKET_IDS_BIGINT } },
+      take: 10,
+      orderBy: { blockTime: "desc" },
+      select: {
+        id: true,
+        trader: true,
+        isBuy: true,
+        tokensDelta: true,
+        blockTime: true,
+        marketId: true,
+        modelIdx: true,
+        impliedProbability: true,
+      },
+    });
+
+    // Get indexer state
+    const indexerState = await prisma.indexerState.findUnique({
+      where: { id: "delphi" },
     });
 
     return {
-      totalTrades,
-      totalMarkets,
+      totalTrades: allTrades.length,
       activeMarkets,
       settledMarkets,
       totalVolume: totalVolume.toString(),
       volume24h: volume24h.toString(),
-      trades24h: trades24h.length,
-      uniqueTraders: uniqueTraders.length,
+      trades24h,
+      uniqueTraders: uniqueTraders.size,
       lastIndexedBlock: indexerState?.lastBlock?.toString() || "0",
+      lastIndexedAt: indexerState?.updatedAt,
       recentTrades,
     };
   } catch (e) {
     console.error("Home data fetch error:", e);
     return {
       totalTrades: 0,
-      totalMarkets: 0,
-      activeMarkets: 0,
-      settledMarkets: 0,
+      activeMarkets: 1,
+      settledMarkets: 2,
       totalVolume: "0",
       volume24h: "0",
       trades24h: 0,
       uniqueTraders: 0,
       lastIndexedBlock: "0",
+      lastIndexedAt: null,
       recentTrades: [],
     };
   }
+}
+
+// Convert internal market ID to display ID
+function getDisplayMarketId(internalId: string): string {
+  const config = MARKETS[internalId];
+  return config?.displayId || internalId;
 }
 
 export default async function HomePage() {
@@ -105,7 +116,7 @@ export default async function HomePage() {
           <span className="gradient-text">Delphi Analytics</span>
         </h1>
         <p className="text-lg text-zinc-400 max-w-2xl mx-auto">
-          Track prediction markets, analyze trading patterns, and monitor P&L 
+          Track prediction markets, analyze trading patterns, and monitor P&L
           for Delphi on Gensyn Testnet.
         </p>
       </div>
@@ -113,15 +124,9 @@ export default async function HomePage() {
       {/* Main Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard
-          title="Total Volume"
-          value={formatNumber(Number(data.totalVolume) / 1e18)}
-          subtitle="$TEST all-time"
-          color="cyan"
-        />
-        <StatCard
-          title="24h Volume"
+          title="24H Volume"
           value={formatNumber(Number(data.volume24h) / 1e18)}
-          subtitle={`${data.trades24h} trades`}
+          subtitle={`${data.trades24h.toLocaleString()} trades`}
           color="green"
         />
         <StatCard
@@ -135,6 +140,12 @@ export default async function HomePage() {
           value={formatNumber(data.uniqueTraders, 0)}
           subtitle={`${formatNumber(data.totalTrades, 0)} total trades`}
           color="purple"
+        />
+        <StatCard
+          title="Total Volume"
+          value={formatNumber(Number(data.totalVolume) / 1e18)}
+          subtitle="$TEST all-time"
+          color="cyan"
         />
       </div>
 
@@ -168,9 +179,9 @@ export default async function HomePage() {
           </div>
         </Link>
 
-        <a 
-          href="https://delphi.gensyn.ai" 
-          target="_blank" 
+        <a
+          href="https://delphi.gensyn.ai"
+          target="_blank"
           rel="noopener noreferrer"
           className="card p-6 card-hover group"
         >
@@ -211,50 +222,51 @@ export default async function HomePage() {
                 </tr>
               </thead>
               <tbody>
-                {data.recentTrades.map((trade: any) => (
-                  <tr key={trade.id} className="table-row border-b border-[var(--border-color)] last:border-0">
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        trade.isBuy 
-                          ? "bg-emerald-500/10 text-emerald-400" 
-                          : "bg-red-500/10 text-red-400"
-                      }`}>
-                        {trade.isBuy ? "BUY" : "SELL"}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link 
-                        href={`/address/${trade.trader}`}
-                        className="font-mono text-sm text-zinc-300 hover:text-blue-400 transition-colors"
-                      >
-                        {formatAddress(trade.trader, 4)}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Link 
-                        href={`/markets/${trade.marketId}`}
-                        className="text-sm text-zinc-300 hover:text-blue-400 transition-colors truncate max-w-[200px] block"
-                      >
-                        {trade.market?.title || `Market #${trade.marketId}`}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="font-mono text-sm text-white">
-                        {formatTokens(trade.tokensDelta)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="font-mono text-sm text-zinc-400">
-                        {trade.impliedProbability?.toFixed(1) || "0"}%
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className="text-xs text-zinc-500">
-                        {formatTimeAgo(trade.blockTime)}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {data.recentTrades.map((trade: any) => {
+                  const internalId = trade.marketId.toString();
+                  const displayId = getDisplayMarketId(internalId);
+                  return (
+                    <tr key={trade.id} className="table-row border-b border-[var(--border-color)] last:border-0">
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                          trade.isBuy
+                            ? "bg-emerald-500/10 text-emerald-400"
+                            : "bg-red-500/10 text-red-400"
+                        }`}>
+                          {trade.isBuy ? "BUY" : "SELL"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Link
+                          href={`/address/${trade.trader}`}
+                          className="font-mono text-sm text-zinc-300 hover:text-blue-400 transition-colors"
+                        >
+                          {formatAddress(trade.trader, 4)}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Link href={`/markets/${internalId}`} className="text-sm text-zinc-300 hover:text-blue-400">
+                          Market #{displayId}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="font-mono text-sm text-white">
+                          {formatTokens(trade.tokensDelta)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="font-mono text-sm text-zinc-400">
+                          {trade.impliedProbability?.toFixed(1) || "0"}%
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <span className="text-xs text-zinc-500">
+                          {formatTimeAgo(trade.blockTime)}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -265,6 +277,9 @@ export default async function HomePage() {
       <div className="mt-6 text-center">
         <p className="text-xs text-zinc-600">
           Last indexed block: <span className="font-mono text-zinc-500">{data.lastIndexedBlock}</span>
+          {data.lastIndexedAt && (
+            <span className="ml-2">• Updated {formatTimeAgo(data.lastIndexedAt)}</span>
+          )}
         </p>
       </div>
     </div>
