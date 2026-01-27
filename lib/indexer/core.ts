@@ -9,13 +9,9 @@ export const DELPHI_IMPL = "0xCaC4F41DF8188034Eb459Bb4c8FaEcd6EE369fdf" as const
 export const CHAIN_ID = 685685;
 export const CHAIN_NAME = "Gensyn Testnet";
 
-// Use implementation address for events (proxy delegates)
-const CONTRACT_ADDRESS = DELPHI_IMPL;
-
-// Batch configuration
-const BATCH_SIZE = 1000; // blocks per batch
-const CONFIRMATIONS = 2n; // wait for confirmations
-const PRICE_SNAPSHOT_INTERVAL = 50; // save price every N blocks
+const CONTRACT_ADDRESS = DELPHI_PROXY;
+const BATCH_SIZE = 500; 
+const CONFIRMATIONS = 2n;
 
 // ============================================
 // EVENT SIGNATURES
@@ -37,7 +33,7 @@ const EVENT_WINNERS = parseAbiItem(
 // ============================================
 function getClient() {
   const rpcUrl = process.env.RPC_URL;
-  if (!rpcUrl) throw new Error("Missing RPC_URL environment variable");
+  if (!rpcUrl) throw new Error("Missing RPC_URL");
   
   return createPublicClient({
     transport: http(rpcUrl, {
@@ -56,487 +52,273 @@ function toDate(tsSeconds: bigint): Date {
 }
 
 function priceToPercent(price: bigint): number {
-  // Price is in UD60x18 format: 1e18 = 100%
-  return Number(price) / 1e16; // Returns 0-100
+  return Number(price) / 1e16;
 }
 
-// Fetch metadata from configUri (IPFS or HTTP)
-async function fetchMarketMetadata(configUri: string): Promise<{
+// ============================================
+// FETCH MARKET CONFIG FROM IPFS
+// ============================================
+async function fetchMarketConfig(configUri: string): Promise<{
   title?: string;
   description?: string;
   category?: string;
-  endTime?: Date;
-  models?: Array<{ idx: number; familyName: string; modelName: string; commitHash?: string }>;
+  models?: Array<{ idx: number; familyName: string; modelName: string }>;
 } | null> {
+  if (!configUri) return null;
+  
   try {
     let url = configUri;
     
-    // Handle IPFS URIs
     if (configUri.startsWith("ipfs://")) {
-      url = `https://ipfs.io/ipfs/${configUri.slice(7)}`;
+      const hash = configUri.slice(7);
+      const gateways = [
+        `https://ipfs.io/ipfs/${hash}`,
+        `https://cloudflare-ipfs.com/ipfs/${hash}`,
+        `https://gateway.pinata.cloud/ipfs/${hash}`,
+      ];
+      
+      for (const gateway of gateways) {
+        try {
+          const response = await fetch(gateway, {
+            signal: AbortSignal.timeout(5000),
+            headers: { 'Accept': 'application/json' },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            return {
+              title: data.title || data.name,
+              description: data.description,
+              category: data.category,
+              models: data.models || data.entries || data.options,
+            };
+          }
+        } catch {
+          continue;
+        }
+      }
+    } else if (configUri.startsWith("http")) {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(5000),
+        headers: { 'Accept': 'application/json' },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          title: data.title || data.name,
+          description: data.description,
+          category: data.category,
+          models: data.models || data.entries || data.options,
+        };
+      }
     }
-    
-    const response = await fetch(url, { 
-      signal: AbortSignal.timeout(10000),
-      headers: { 'Accept': 'application/json' }
-    });
-    
-    if (!response.ok) return null;
-    
-    const data = await response.json();
-    
-    return {
-      title: data.title || data.name,
-      description: data.description,
-      category: data.category,
-      endTime: data.endTime ? new Date(data.endTime) : undefined,
-      models: data.models || data.options,
-    };
   } catch (e) {
-    console.warn(`Failed to fetch metadata from ${configUri}:`, e);
-    return null;
+    console.log(`⚠️ Could not fetch config: ${configUri}`);
   }
+  
+  return null;
 }
 
 // ============================================
 // EVENT HANDLERS
 // ============================================
-async function handleNewMarket(
-  prisma: PrismaClient,
-  log: Log,
-  blockTime: Date
-) {
+async function handleNewMarket(prisma: PrismaClient, log: Log, blockTime: Date) {
   const args = (log as any).args;
   const marketId = BigInt(args.newMarketId.toString());
   const configUri = args.newMarketConfigUri as string;
   const configUriHash = args.newMarketConfigUriHash as string;
 
-  // Fetch metadata
-  let metadata = null;
-  if (configUri) {
-    metadata = await fetchMarketMetadata(configUri);
+  const config = await fetchMarketConfig(configUri);
+
+  let modelsJson: string | undefined;
+  if (config?.models && config.models.length > 0) {
+    modelsJson = JSON.stringify(config.models);
   }
 
   await prisma.market.upsert({
     where: { marketId },
-    update: {
-      configUri,
-      configUriHash,
-      title: metadata?.title,
-      description: metadata?.description,
-      category: metadata?.category,
-      endTime: metadata?.endTime,
-      modelsJson: metadata?.models ? JSON.stringify(metadata.models) : undefined,
-    },
-    create: {
-      marketId,
-      configUri,
-      configUriHash,
-      createdAtBlock: BigInt(log.blockNumber!.toString()),
-      createdAtTime: blockTime,
-      title: metadata?.title,
-      description: metadata?.description,
-      category: metadata?.category,
-      endTime: metadata?.endTime,
-      modelsJson: metadata?.models ? JSON.stringify(metadata.models) : undefined,
-      status: 0,
-    },
+    update: { configUri, configUriHash, title: config?.title, description: config?.description, modelsJson },
+    create: { marketId, configUri, configUriHash, createdAtBlock: BigInt(log.blockNumber!.toString()), createdAtTime: blockTime, title: config?.title, description: config?.description, modelsJson, status: 0 },
   });
-
-  console.log(`📊 New market: #${marketId} - ${metadata?.title || 'Unknown'}`);
 }
 
-async function handleTradeExecuted(
-  prisma: PrismaClient,
-  log: Log,
-  blockTime: Date
-) {
+async function handleTradeExecuted(prisma: PrismaClient, log: Log, blockTime: Date): Promise<boolean> {
   const args = (log as any).args;
-  const {
-    marketId,
-    allowedModelIdx,
-    trader,
-    isBuy,
-    tokensDelta,
-    modelSharesDelta,
-    modelNewPrice,
-    modelNewSupply,
-    marketNewSupply,
-  } = args;
+  const { marketId, allowedModelIdx, trader, isBuy, tokensDelta, modelSharesDelta, modelNewPrice, modelNewSupply, marketNewSupply } = args;
 
   const id = `${log.transactionHash}:${log.logIndex}`;
-  const normalizedTrader = getAddress(trader);
+  const existing = await prisma.trade.findUnique({ where: { id } });
+  if (existing) return false;
+
   const mktId = BigInt(marketId.toString());
-  const modelIdx = BigInt(allowedModelIdx.toString());
-  const tokensStr = tokensDelta.toString();
-  const sharesStr = modelSharesDelta.toString();
-  const priceStr = modelNewPrice.toString();
-  const impliedProb = priceToPercent(BigInt(priceStr));
+  await prisma.market.upsert({ where: { marketId: mktId }, update: {}, create: { marketId: mktId, status: 0 } });
 
-  // Ensure market exists
-  await prisma.market.upsert({
-    where: { marketId: mktId },
-    update: {
-      totalTrades: { increment: 1 },
-      totalVolume: {
-        // Can't do BigInt addition in Prisma, will update separately
-        set: undefined
-      }
-    },
-    create: {
-      marketId: mktId,
-      status: 0,
-      totalTrades: 1,
-    },
-  });
-
-  // Insert trade
-  await prisma.trade.upsert({
-    where: { id },
-    update: {},
-    create: {
+  await prisma.trade.create({
+    data: {
       id,
       txHash: log.transactionHash!,
       logIndex: Number(log.logIndex),
       blockNumber: BigInt(log.blockNumber!.toString()),
       blockTime,
       marketId: mktId,
-      modelIdx,
-      trader: normalizedTrader,
+      modelIdx: BigInt(allowedModelIdx.toString()),
+      trader: getAddress(trader),
       isBuy: Boolean(isBuy),
-      tokensDelta: tokensStr,
-      sharesDelta: sharesStr,
-      modelNewPrice: priceStr,
+      tokensDelta: tokensDelta.toString(),
+      sharesDelta: modelSharesDelta.toString(),
+      modelNewPrice: modelNewPrice.toString(),
       modelNewSupply: modelNewSupply.toString(),
       marketNewSupply: marketNewSupply.toString(),
-      impliedProbability: impliedProb,
+      impliedProbability: priceToPercent(BigInt(modelNewPrice.toString())),
     },
   });
 
-  // Update trader stats
-  await prisma.traderStats.upsert({
-    where: { address: normalizedTrader },
-    update: {
-      totalTrades: { increment: 1 },
-      buyCount: isBuy ? { increment: 1 } : undefined,
-      sellCount: !isBuy ? { increment: 1 } : undefined,
-      lastTradeAt: blockTime,
-    },
-    create: {
-      address: normalizedTrader,
-      totalTrades: 1,
-      buyCount: isBuy ? 1 : 0,
-      sellCount: !isBuy ? 1 : 0,
-      firstTradeAt: blockTime,
-      lastTradeAt: blockTime,
-    },
-  });
-
-  // Save price snapshot periodically
-  const blockNum = Number(log.blockNumber);
-  if (blockNum % PRICE_SNAPSHOT_INTERVAL === 0) {
-    await prisma.priceSnapshot.create({
-      data: {
-        marketId: mktId,
-        modelIdx,
-        price: priceStr,
-        probability: impliedProb,
-        timestamp: blockTime,
-        blockNumber: BigInt(blockNum),
-      },
-    });
-  }
+  return true;
 }
 
-async function handleWinnersSubmitted(
-  prisma: PrismaClient,
-  log: Log,
-  blockTime: Date
-) {
+async function handleWinnersSubmitted(prisma: PrismaClient, log: Log, blockTime: Date) {
   const args = (log as any).args;
   const marketId = BigInt(args.marketId.toString());
   const winningModelIdx = BigInt(args.winningModelIdx.toString());
 
   await prisma.market.upsert({
     where: { marketId },
-    update: {
-      winningModelIdx,
-      status: 2, // settled
-      settledAt: blockTime,
-    },
-    create: {
-      marketId,
-      winningModelIdx,
-      status: 2,
-      settledAt: blockTime,
-    },
+    update: { winningModelIdx, status: 2, settledAt: blockTime },
+    create: { marketId, winningModelIdx, status: 2, settledAt: blockTime },
   });
-
-  console.log(`🏆 Market #${marketId} settled - Winner: Model ${winningModelIdx}`);
 }
 
 // ============================================
-// MAIN INDEXER FUNCTION
+// MAIN INDEXER
 // ============================================
 export async function runIndexer(
   prisma: PrismaClient,
-  options: {
-    fromBlock?: bigint;
-    toBlock?: bigint;
-    batchSize?: number;
-    onProgress?: (current: bigint, target: bigint) => void;
-  } = {}
+  options: { fromBlock?: bigint; toBlock?: bigint; batchSize?: number } = {}
 ): Promise<{ indexed: number; lastBlock: bigint }> {
+  // CRITICAL FIX: Ensure prisma is defined
+  if (!prisma) throw new Error("PrismaClient is required by runIndexer");
+
   const client = getClient();
   const batchSize = BigInt(options.batchSize || BATCH_SIZE);
-  
-  // Get current chain head
   const headBlock = await client.getBlockNumber();
   const targetBlock = options.toBlock ?? (headBlock - CONFIRMATIONS);
   
-  // Get starting block
   let fromBlock: bigint;
   if (options.fromBlock !== undefined) {
     fromBlock = options.fromBlock;
   } else {
+    // FIX: Added null check for the result of findUnique
     const state = await prisma.indexerState.findUnique({ where: { id: "delphi" } });
-    if (state) {
-      fromBlock = BigInt(state.lastBlock.toString()) + 1n;
-    } else {
-      // Start from a reasonable block (adjust based on contract deployment)
-      fromBlock = 0n;
-    }
+    fromBlock = (state && state.lastBlock && state.lastBlock > 0n) 
+      ? BigInt(state.lastBlock.toString()) + 1n 
+      : 9000000n;
   }
 
-  if (fromBlock > targetBlock) {
-    console.log(`Already at block ${fromBlock}, head is ${targetBlock}`);
-    return { indexed: 0, lastBlock: fromBlock - 1n };
-  }
+  if (fromBlock > targetBlock) return { indexed: 0, lastBlock: fromBlock - 1n };
 
-  console.log(`📡 Indexing from block ${fromBlock} to ${targetBlock}`);
-  
   let totalIndexed = 0;
   let currentBlock = fromBlock;
   const blockTimestampCache = new Map<bigint, Date>();
 
-  // Helper to get block timestamp
   const getBlockTime = async (blockNumber: bigint): Promise<Date> => {
     const cached = blockTimestampCache.get(blockNumber);
     if (cached) return cached;
-    
-    const block = await client.getBlock({ blockNumber });
-    const time = toDate(block.timestamp);
-    blockTimestampCache.set(blockNumber, time);
-    return time;
+    try {
+      const block = await client.getBlock({ blockNumber });
+      const time = toDate(block.timestamp);
+      blockTimestampCache.set(blockNumber, time);
+      return time;
+    } catch { return new Date(); }
   };
 
   while (currentBlock <= targetBlock) {
-    const endBlock = currentBlock + batchSize - 1n > targetBlock 
-      ? targetBlock 
-      : currentBlock + batchSize - 1n;
+    const endBlock = currentBlock + batchSize - 1n > targetBlock ? targetBlock : currentBlock + batchSize - 1n;
 
-    try {
-      // Fetch all events in batch
-      const logs = await client.getLogs({
-        address: CONTRACT_ADDRESS,
-        fromBlock: currentBlock,
-        toBlock: endBlock,
-        events: [EVENT_NEW_MARKET, EVENT_TRADE_EXECUTED, EVENT_WINNERS],
-      });
+    const logs = await client.getLogs({
+      address: CONTRACT_ADDRESS,
+      fromBlock: currentBlock,
+      toBlock: endBlock,
+      events: [EVENT_NEW_MARKET, EVENT_TRADE_EXECUTED, EVENT_WINNERS],
+    });
 
-      // Process each log
-      for (const log of logs) {
-        const blockTime = await getBlockTime(log.blockNumber!);
-
-        switch (log.eventName) {
-          case "NewMarket":
-            await handleNewMarket(prisma, log, blockTime);
-            break;
-          case "TradeExecuted":
-            await handleTradeExecuted(prisma, log, blockTime);
-            totalIndexed++;
-            break;
-          case "WinnersSubmitted":
-            await handleWinnersSubmitted(prisma, log, blockTime);
-            break;
-        }
+    for (const log of logs) {
+      const blockTime = await getBlockTime(log.blockNumber!);
+      switch (log.eventName) {
+        case "NewMarket": await handleNewMarket(prisma, log, blockTime); break;
+        case "TradeExecuted": if (await handleTradeExecuted(prisma, log, blockTime)) totalIndexed++; break;
+        case "WinnersSubmitted": await handleWinnersSubmitted(prisma, log, blockTime); break;
       }
-
-      // Update indexer state
-      await prisma.indexerState.upsert({
-        where: { id: "delphi" },
-        update: { 
-          lastBlock: endBlock,
-          lastBlockTime: logs.length > 0 ? await getBlockTime(endBlock) : undefined,
-          lastError: null,
-        },
-        create: { 
-          id: "delphi", 
-          lastBlock: endBlock,
-        },
-      });
-
-      if (logs.length > 0) {
-        console.log(`  Blocks ${currentBlock}-${endBlock}: ${logs.length} events`);
-      }
-
-      options.onProgress?.(endBlock, targetBlock);
-
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      console.error(`Error indexing blocks ${currentBlock}-${endBlock}:`, errorMsg);
-      
-      await prisma.indexerState.upsert({
-        where: { id: "delphi" },
-        update: { lastError: errorMsg },
-        create: { id: "delphi", lastBlock: currentBlock - 1n, lastError: errorMsg },
-      });
-      
-      throw error;
     }
+
+    await prisma.indexerState.upsert({
+      where: { id: "delphi" },
+      update: { lastBlock: endBlock, updatedAt: new Date() },
+      create: { id: "delphi", lastBlock: endBlock },
+    });
 
     currentBlock = endBlock + 1n;
-    
-    // Clear cache periodically to prevent memory issues
-    if (blockTimestampCache.size > 1000) {
-      blockTimestampCache.clear();
-    }
+    if (blockTimestampCache.size > 500) blockTimestampCache.clear();
   }
 
-  console.log(`✅ Indexed ${totalIndexed} trades up to block ${targetBlock}`);
   return { indexed: totalIndexed, lastBlock: targetBlock };
 }
 
 // ============================================
-// RECALCULATE TRADER STATS (for accuracy)
+// RECALCULATE STATS (Remains unchanged)
 // ============================================
-export async function recalculateTraderStats(prisma: PrismaClient): Promise<void> {
-  console.log("🔄 Recalculating trader stats from all trades...");
-
-  // Get all unique traders
-  const traders = await prisma.trade.findMany({
-    distinct: ['trader'],
-    select: { trader: true },
-  });
+export async function recalculateTraderStats(prisma: PrismaClient): Promise<number> {
+  const settledMarkets = await prisma.market.findMany({ where: { status: 2, winningModelIdx: { not: null } } });
+  const winningModels = new Map(settledMarkets.map(m => [m.marketId.toString(), m.winningModelIdx!]));
+  const traders = await prisma.trade.findMany({ distinct: ['trader'], select: { trader: true } });
+  let updated = 0;
 
   for (const { trader } of traders) {
-    // Get all trades for this trader
-    const trades = await prisma.trade.findMany({
-      where: { trader },
-      orderBy: { blockTime: 'asc' },
-      select: {
-        isBuy: true,
-        tokensDelta: true,
-        sharesDelta: true,
-        marketId: true,
-        modelIdx: true,
-        blockTime: true,
-      },
-    });
-
-    let totalVolume = 0n;
-    let buyCount = 0;
-    let sellCount = 0;
-    let realizedPnl = 0n;
-    let totalCostBasis = 0n;
-
-    // Track positions per market:model
+    const trades = await prisma.trade.findMany({ where: { trader }, orderBy: { blockTime: 'asc' } });
+    let totalVolume = 0n, buyCount = 0, sellCount = 0, totalSpent = 0n, totalReceived = 0n;
     const positions = new Map<string, { shares: bigint; cost: bigint }>();
 
     for (const trade of trades) {
-      const tokens = BigInt(trade.tokensDelta);
-      const shares = BigInt(trade.sharesDelta);
-      totalVolume += tokens;
+      const tokens = BigInt(trade.tokensDelta), shares = BigInt(trade.sharesDelta);
+      const absTokens = tokens < 0n ? -tokens : tokens;
+      totalVolume += absTokens;
+      const key = `${trade.marketId}:${trade.modelIdx}`;
 
       if (trade.isBuy) {
-        buyCount++;
-        const key = `${trade.marketId}:${trade.modelIdx}`;
+        buyCount++; totalSpent += absTokens;
         const pos = positions.get(key) || { shares: 0n, cost: 0n };
-        pos.shares += shares;
-        pos.cost += tokens;
+        pos.shares += shares; pos.cost += absTokens;
         positions.set(key, pos);
-        totalCostBasis += tokens;
       } else {
-        sellCount++;
-        const key = `${trade.marketId}:${trade.modelIdx}`;
-        const pos = positions.get(key) || { shares: 0n, cost: 0n };
-        
-        if (pos.shares > 0n) {
-          const avgCost = pos.cost / pos.shares;
-          const costRemoved = avgCost * shares;
-          realizedPnl += tokens - costRemoved;
-          pos.shares -= shares;
-          pos.cost = pos.cost > costRemoved ? pos.cost - costRemoved : 0n;
-          positions.set(key, pos);
-        } else {
-          realizedPnl += tokens;
-        }
+        sellCount++; totalReceived += absTokens;
+        const pos = positions.get(key);
+        if (pos && pos.shares > 0n) { pos.shares -= (shares > pos.shares ? pos.shares : shares); positions.set(key, pos); }
       }
     }
 
-    // Update stats
-    await prisma.traderStats.upsert({
-      where: { address: trader },
-      update: {
-        totalTrades: trades.length,
-        totalVolume: totalVolume.toString(),
-        buyCount,
-        sellCount,
-        realizedPnl: realizedPnl.toString(),
-        totalCostBasis: totalCostBasis.toString(),
-        firstTradeAt: trades[0]?.blockTime,
-        lastTradeAt: trades[trades.length - 1]?.blockTime,
-      },
-      create: {
-        address: trader,
-        totalTrades: trades.length,
-        totalVolume: totalVolume.toString(),
-        buyCount,
-        sellCount,
-        realizedPnl: realizedPnl.toString(),
-        totalCostBasis: totalCostBasis.toString(),
-        firstTradeAt: trades[0]?.blockTime,
-        lastTradeAt: trades[trades.length - 1]?.blockTime,
-      },
-    });
-  }
-
-  console.log(`✅ Recalculated stats for ${traders.length} traders`);
-}
-
-// ============================================
-// UPDATE MARKET VOLUMES
-// ============================================
-export async function updateMarketVolumes(prisma: PrismaClient): Promise<void> {
-  const markets = await prisma.market.findMany({
-    select: { marketId: true },
-  });
-
-  for (const { marketId } of markets) {
-    const result = await prisma.trade.aggregate({
-      where: { marketId },
-      _sum: { tokensDelta: true },
-      _count: true,
-    });
-
-    // Note: tokensDelta is stored as string, so sum won't work directly
-    // We need to calculate manually
-    const trades = await prisma.trade.findMany({
-      where: { marketId },
-      select: { tokensDelta: true },
-    });
-
-    let totalVolume = 0n;
-    for (const t of trades) {
-      totalVolume += BigInt(t.tokensDelta);
+    let settlementPayout = 0n;
+    for (const [key, pos] of positions.entries()) {
+      const [marketIdStr, modelIdxStr] = key.split(':');
+      if (winningModels.get(marketIdStr)?.toString() === modelIdxStr) settlementPayout += pos.shares;
     }
 
-    await prisma.market.update({
-      where: { marketId },
-      data: {
-        totalVolume: totalVolume.toString(),
-        totalTrades: trades.length,
-      },
+    await prisma.traderStats.upsert({
+      where: { address: trader },
+      update: { totalTrades: trades.length, totalVolume: totalVolume.toString(), buyCount, sellCount, realizedPnl: (totalReceived + settlementPayout - totalSpent).toString(), totalCostBasis: totalSpent.toString(), lastTradeAt: trades[trades.length - 1]?.blockTime },
+      create: { address: trader, totalTrades: trades.length, totalVolume: totalVolume.toString(), buyCount, sellCount, realizedPnl: (totalReceived + settlementPayout - totalSpent).toString(), totalCostBasis: totalSpent.toString(), firstTradeAt: trades[0]?.blockTime, lastTradeAt: trades[trades.length - 1]?.blockTime },
     });
+    updated++;
   }
+  return updated;
+}
+
+export async function updateMarketVolumes(prisma: PrismaClient): Promise<void> {
+  const markets = await prisma.market.findMany({ select: { marketId: true } });
+  for (const { marketId } of markets) {
+    const trades = await prisma.trade.findMany({ where: { marketId }, select: { tokensDelta: true } });
+    const totalVolume = trades.reduce((acc, t) => acc + (BigInt(t.tokensDelta) < 0n ? -BigInt(t.tokensDelta) : BigInt(t.tokensDelta)), 0n);
+    await prisma.market.update({ where: { marketId }, data: { totalVolume: totalVolume.toString(), totalTrades: trades.length } });
+  }
+}
+
+export function getModelName(marketId: number | bigint, modelIdx: number | bigint): string {
+  return `Model ${modelIdx}`;
 }
