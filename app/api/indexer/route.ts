@@ -23,7 +23,7 @@ export async function GET(req: Request) {
       case "index": {
         // Run incremental indexing
         const result = await runIndexer(prisma, {
-          batchSize: 500,
+          batchSize: 50,
           onProgress: (current, target) => {
             console.log(`Progress: ${current}/${target}`);
           },
@@ -83,7 +83,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const result = await runIndexer(prisma, { batchSize: 500 });
+    const result = await runIndexer(prisma, { batchSize: 50 });
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
     console.error("Indexer POST error:", error);
