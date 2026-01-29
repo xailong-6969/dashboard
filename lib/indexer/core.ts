@@ -10,7 +10,7 @@ export const CHAIN_ID = 685685;
 export const CHAIN_NAME = "Gensyn Testnet";
 
 const CONTRACT_ADDRESS = DELPHI_PROXY;
-const BATCH_SIZE = 100000; 
+const BATCH_SIZE = 500; 
 const CONFIRMATIONS = 2n;
 
 // ============================================
