@@ -98,7 +98,7 @@ export default async function MarketDetailPage({ params }: PageProps) {
   }
 
   const isSettled = market.status === "settled";
-  const winnerModel = market.winnerIdx !== undefined 
+  const winnerModel = market.winnerIdx !== undefined
     ? market.models.find(m => m.idx === market.winnerIdx)
     : undefined;
 
@@ -114,9 +114,8 @@ export default async function MarketDetailPage({ params }: PageProps) {
             <h1 className="text-3xl font-bold text-white mb-2">Market #{market.displayId}</h1>
             <p className="text-zinc-400">{market.title}</p>
           </div>
-          <span className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium ${
-            isSettled ? "badge-settled" : "badge-active"
-          }`}>
+          <span className={`shrink-0 px-3 py-1.5 rounded-full text-sm font-medium ${isSettled ? "badge-settled" : "badge-active"
+            }`}>
             {isSettled ? "Settled" : "Active"}
           </span>
         </div>
@@ -169,11 +168,10 @@ export default async function MarketDetailPage({ params }: PageProps) {
             return (
               <div
                 key={model.idx}
-                className={`flex items-center justify-between p-4 rounded-lg ${
-                  isWinner
+                className={`flex items-center justify-between p-4 rounded-lg ${isWinner
                     ? "bg-amber-500/10 border border-amber-500/30"
                     : "bg-zinc-800/50"
-                }`}
+                  }`}
               >
                 <div className="flex items-center gap-3">
                   <div
@@ -221,11 +219,10 @@ export default async function MarketDetailPage({ params }: PageProps) {
                       className="table-row border-b border-[var(--border-color)] last:border-0"
                     >
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                          trade.isBuy
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${trade.isBuy
                             ? "bg-emerald-500/10 text-emerald-400"
                             : "bg-red-500/10 text-red-400"
-                        }`}>
+                          }`}>
                           {trade.isBuy ? "BUY" : "SELL"}
                         </span>
                       </td>
@@ -284,7 +281,7 @@ export default async function MarketDetailPage({ params }: PageProps) {
         <h2 className="font-semibold text-white mb-4">Links</h2>
         <div className="flex flex-wrap gap-4">
           <a
-            href={`https://delphi.gensyn.ai/markets/${internalId}`}
+            href={`https://delphi.gensyn.ai/market/${internalId}`}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-colors"
