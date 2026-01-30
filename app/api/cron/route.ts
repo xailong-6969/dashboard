@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       indexed: result.indexed,
-      lastBlock: result.lastBlock.toString(),
+      lastBlock: result.lastBlock?.toString(),
       duration: `${duration}ms`,
       timestamp: new Date().toISOString(),
     });

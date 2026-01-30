@@ -37,17 +37,19 @@ export async function GET(req: Request) {
         return NextResponse.json({
           success: true,
           action: "index",
-          ...result,
+          indexed: result.indexed,
+          lastBlock: result.lastBlock?.toString(),
         });
       }
 
       case "recalculate": {
         // Recalculate all trader stats
-        await recalculateTraderStats(prisma);
+        const updatedCount = await recalculateTraderStats(prisma);
         await updateMarketVolumes(prisma);
         return NextResponse.json({
           success: true,
           action: "recalculate",
+          updatedTraders: updatedCount,
         });
       }
 
@@ -82,7 +84,10 @@ export async function GET(req: Request) {
 
         return NextResponse.json({
           success: true,
-          state,
+          state: state ? {
+            ...state,
+            lastBlock: state.lastBlock.toString(),
+          } : null,
           tradeCount,
           marketCount,
         });
@@ -117,7 +122,11 @@ export async function POST(req: Request) {
       await updateMarketVolumes(prisma);
     }
 
-    return NextResponse.json({ success: true, ...result });
+    return NextResponse.json({
+      success: true,
+      indexed: result.indexed,
+      lastBlock: result.lastBlock?.toString()
+    });
   } catch (error) {
     console.error("Indexer POST error:", error);
     return NextResponse.json(
