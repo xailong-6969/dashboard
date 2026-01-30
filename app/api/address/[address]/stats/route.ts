@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getAddress } from "viem";
-import { VALID_MARKET_IDS_BIGINT, MARKET_WINNERS } from "@/lib/markets-config";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
-export const revalidate = 600; // Cache for 10 minutes
 
 function isHexAddress(a: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(a);
@@ -24,12 +21,9 @@ export async function GET(
   try {
     const address = getAddress(rawAddress);
 
-    // Get all trades for this address - same markets as leaderboard
+    // Get all trades for this address
     const trades = await prisma.trade.findMany({
-      where: {
-        trader: address,
-        marketId: { in: VALID_MARKET_IDS_BIGINT }
-      },
+      where: { trader: address },
       orderBy: { blockTime: "asc" },
       select: {
         isBuy: true,
@@ -41,77 +35,66 @@ export async function GET(
       },
     });
 
-    // Calculate stats using INDEXER's exact formula:
-    // P&L = totalReceived + settlementPayout - totalSpent
+    // Calculate stats
     let totalVolume = 0n;
     let buyVolume = 0n;
     let sellVolume = 0n;
     let buyCount = 0;
     let sellCount = 0;
-    let totalSpent = 0n;
-    let totalReceived = 0n;
 
     const marketsTraded = new Set<string>();
     const modelsTraded = new Set<string>();
-    const positions = new Map<string, { shares: bigint; cost: bigint }>();
+
+    // P&L calculation
+    const positions = new Map<string, { shares: bigint; cost: bigint; realized: bigint }>();
+    let totalRealizedPnl = 0n;
+    let totalCostBasis = 0n;
 
     for (const trade of trades) {
       const tokens = BigInt(trade.tokensDelta);
       const shares = BigInt(trade.sharesDelta);
-      const absTokens = tokens < 0n ? -tokens : tokens;
+      totalVolume += tokens;
 
-      totalVolume += absTokens;
       marketsTraded.add(trade.marketId.toString());
       modelsTraded.add(`${trade.marketId}:${trade.modelIdx}`);
 
       const posKey = `${trade.marketId}:${trade.modelIdx}`;
-      let pos = positions.get(posKey) || { shares: 0n, cost: 0n };
+      let pos = positions.get(posKey) || { shares: 0n, cost: 0n, realized: 0n };
 
       if (trade.isBuy) {
         buyCount++;
-        buyVolume += absTokens;
-        totalSpent += absTokens;
+        buyVolume += tokens;
         pos.shares += shares;
-        pos.cost += absTokens;
+        pos.cost += tokens;
+        totalCostBasis += tokens;
       } else {
         sellCount++;
-        sellVolume += absTokens;
-        totalReceived += absTokens;
-        // Reduce shares - same logic as indexer
+        sellVolume += tokens;
         if (pos.shares > 0n) {
-          const sharesToRemove = shares > pos.shares ? pos.shares : shares;
-          pos.shares -= sharesToRemove;
+          const avgCost = pos.cost / pos.shares;
+          const costRemoved = avgCost * shares;
+          const pnl = tokens - costRemoved;
+          pos.realized += pnl;
+          totalRealizedPnl += pnl;
+          pos.shares -= shares;
+          pos.cost = pos.cost > costRemoved ? pos.cost - costRemoved : 0n;
+        } else {
+          pos.realized += tokens;
+          totalRealizedPnl += tokens;
         }
       }
       positions.set(posKey, pos);
     }
 
-    // Calculate settlement P&L
-    let settlementPayout = 0n;
+    // Count open positions
     let openPositions = 0;
     let unrealizedCostBasis = 0n;
-
-    for (const [posKey, pos] of positions.entries()) {
-      const [marketId, modelIdx] = posKey.split(":");
-      const winnerIdx = MARKET_WINNERS[marketId];
-
+    for (const pos of positions.values()) {
       if (pos.shares > 0n) {
-        if (winnerIdx !== undefined) {
-          // Market is settled - add settlement payout for winning shares
-          if (winnerIdx.toString() === modelIdx) {
-            settlementPayout += pos.shares;
-          }
-          // Losing shares get 0, no action needed
-        } else {
-          // Market not settled
-          openPositions++;
-          unrealizedCostBasis += pos.cost;
-        }
+        openPositions++;
+        unrealizedCostBasis += pos.cost;
       }
     }
-
-    // P&L = totalReceived + settlementPayout - totalSpent
-    const realizedPnl = totalReceived + settlementPayout - totalSpent;
 
     return NextResponse.json({
       address,
@@ -124,8 +107,8 @@ export async function GET(
       marketsTraded: marketsTraded.size,
       modelsTraded: modelsTraded.size,
       openPositions,
-      realizedPnl: realizedPnl.toString(),
-      totalCostBasis: totalSpent.toString(),
+      realizedPnl: totalRealizedPnl.toString(),
+      totalCostBasis: totalCostBasis.toString(),
       unrealizedCostBasis: unrealizedCostBasis.toString(),
       firstTrade: trades[0]?.blockTime || null,
       lastTrade: trades[trades.length - 1]?.blockTime || null,
