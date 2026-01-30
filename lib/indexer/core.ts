@@ -10,7 +10,7 @@ export const CHAIN_ID = 685685;
 export const CHAIN_NAME = "Gensyn Testnet";
 
 const CONTRACT_ADDRESS = DELPHI_PROXY;
-const BATCH_SIZE = 50; 
+const BATCH_SIZE = 50;
 const CONFIRMATIONS = 2n;
 
 // ============================================
@@ -29,18 +29,23 @@ const EVENT_WINNERS = parseAbiItem(
 );
 
 // ============================================
-// RPC CLIENT
+// RPC CLIENT - No caching to always get fresh block numbers
 // ============================================
 function getClient() {
   const rpcUrl = process.env.RPC_URL;
   if (!rpcUrl) throw new Error("Missing RPC_URL");
-  
+
   return createPublicClient({
     transport: http(rpcUrl, {
       retryCount: 3,
       retryDelay: 1000,
       timeout: 30000,
+      batch: false, // Disable batching to avoid stale responses
     }),
+    batch: {
+      multicall: false, // Disable multicall batching
+    },
+    cacheTime: 0, // Disable caching
   });
 }
 
@@ -65,10 +70,10 @@ async function fetchMarketConfig(configUri: string): Promise<{
   models?: Array<{ idx: number; familyName: string; modelName: string }>;
 } | null> {
   if (!configUri) return null;
-  
+
   try {
     let url = configUri;
-    
+
     if (configUri.startsWith("ipfs://")) {
       const hash = configUri.slice(7);
       const gateways = [
@@ -76,7 +81,7 @@ async function fetchMarketConfig(configUri: string): Promise<{
         `https://cloudflare-ipfs.com/ipfs/${hash}`,
         `https://gateway.pinata.cloud/ipfs/${hash}`,
       ];
-      
+
       for (const gateway of gateways) {
         try {
           const response = await fetch(gateway, {
@@ -114,7 +119,7 @@ async function fetchMarketConfig(configUri: string): Promise<{
   } catch (e) {
     console.log(`⚠️ Could not fetch config: ${configUri}`);
   }
-  
+
   return null;
 }
 
@@ -148,7 +153,7 @@ async function handleTradeExecuted(prisma: PrismaClient, log: Log, blockTime: Da
 
   const id = `${log.transactionHash}:${log.logIndex}`;
   const mktId = BigInt(marketId.toString());
-  
+
   // Check if trade already exists
   const existing = await prisma.trade.findUnique({ where: { id } });
   if (existing) {
@@ -157,10 +162,10 @@ async function handleTradeExecuted(prisma: PrismaClient, log: Log, blockTime: Da
   }
 
   // Ensure market exists
-  await prisma.market.upsert({ 
-    where: { marketId: mktId }, 
-    update: {}, 
-    create: { marketId: mktId, status: 0 } 
+  await prisma.market.upsert({
+    where: { marketId: mktId },
+    update: {},
+    create: { marketId: mktId, status: 0 }
   });
 
   // Create the trade
@@ -218,16 +223,38 @@ export async function runIndexer(
 
   const client = getClient();
   const batchSize = BigInt(options.batchSize || BATCH_SIZE);
-  const headBlock = await client.getBlockNumber();
+
+  // Use direct RPC call to bypass any viem caching
+  let headBlock: bigint;
+  try {
+    const rpcUrl = process.env.RPC_URL;
+    const response = await fetch(rpcUrl!, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'eth_blockNumber',
+        params: [],
+        id: Date.now()
+      })
+    });
+    const json = await response.json();
+    headBlock = BigInt(json.result);
+    console.log(`📡 Direct RPC block number: ${headBlock}`);
+  } catch (e) {
+    console.log('⚠️ Direct RPC failed, falling back to viem');
+    headBlock = await client.getBlockNumber();
+  }
+
   const targetBlock = options.toBlock ?? (headBlock - CONFIRMATIONS);
-  
+
   let fromBlock: bigint;
   if (options.fromBlock !== undefined) {
     fromBlock = options.fromBlock;
   } else {
     const state = await prisma.indexerState.findUnique({ where: { id: "delphi" } });
-    fromBlock = (state && state.lastBlock && state.lastBlock > 0n) 
-      ? BigInt(state.lastBlock.toString()) + 1n 
+    fromBlock = (state && state.lastBlock && state.lastBlock > 0n)
+      ? BigInt(state.lastBlock.toString()) + 1n
       : 9000000n;
   }
 
@@ -273,16 +300,16 @@ export async function runIndexer(
     for (const log of logs) {
       const blockTime = await getBlockTime(log.blockNumber!);
       switch (log.eventName) {
-        case "NewMarket": 
-          await handleNewMarket(prisma, log, blockTime); 
+        case "NewMarket":
+          await handleNewMarket(prisma, log, blockTime);
           break;
-        case "TradeExecuted": 
+        case "TradeExecuted":
           if (await handleTradeExecuted(prisma, log, blockTime)) {
             batchIndexed++;
           }
           break;
-        case "WinnersSubmitted": 
-          await handleWinnersSubmitted(prisma, log, blockTime); 
+        case "WinnersSubmitted":
+          await handleWinnersSubmitted(prisma, log, blockTime);
           break;
       }
     }

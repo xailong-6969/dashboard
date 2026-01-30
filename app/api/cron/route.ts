@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { runIndexer, recalculateTraderStats } from "@/lib/indexer/core";
+import { runIndexer, recalculateTraderStats, updateMarketVolumes } from "@/lib/indexer/core";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -52,12 +52,15 @@ export async function GET(request: NextRequest) {
     console.log(`📈 Indexed ${result.indexed} new trades`);
     console.log(`📦 Last block: ${result.lastBlock}`);
 
-    // Recalculate trader stats if new trades
-    if (result.indexed > 0) {
-      console.log("\n📊 Updating Stats...");
-      const updated = await recalculateTraderStats(prisma);
-      console.log(`✅ Updated ${updated} trader stats`);
-    }
+    // Always update stats and market volumes (not just when new trades)
+    // This ensures volumes stay in sync even after restarts
+    console.log("\n📊 Updating Stats...");
+    const updated = await recalculateTraderStats(prisma);
+    console.log(`✅ Updated ${updated} trader stats`);
+
+    console.log("\n📈 Updating Market Volumes...");
+    await updateMarketVolumes(prisma);
+    console.log(`✅ Market volumes updated`);
 
     const duration = Date.now() - startTime;
     console.log(`\n✅ CRON COMPLETED in ${duration}ms`);
@@ -80,6 +83,6 @@ export async function GET(request: NextRequest) {
     await prisma.indexerState.update({
       where: { id: "delphi" },
       data: { isRunning: false, updatedAt: new Date() },
-    }).catch(() => {});
+    }).catch(() => { });
   }
 }

@@ -1,24 +1,58 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { VALID_MARKET_IDS_BIGINT } from "@/lib/markets-config";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// Cache stats for 15 seconds to balance speed and freshness
+let cachedStats: any = null;
+let cacheTime: number = 0;
+const CACHE_DURATION = 15 * 1000; // 15 seconds
+
 export async function GET() {
   try {
-    // All from DATABASE - no external API calls!
-    const [activeCount, settledCount, allTrades, indexerState, recentTrades] = await Promise.all([
-      prisma.market.count({ where: { status: 0 } }),
-      prisma.market.count({ where: { status: 2 } }),
-      prisma.trade.findMany({
-        select: {
-          tokensDelta: true,
-          blockTime: true,
-          isBuy: true,
-          trader: true,
-        },
+    // Return cached stats if still fresh
+    if (cachedStats && Date.now() - cacheTime < CACHE_DURATION) {
+      return NextResponse.json(cachedStats);
+    }
+
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    // Optimized queries using database aggregations
+    const [
+      activeCount,
+      settledCount,
+      totalTradesCount,
+      uniqueTradersCount,
+      indexerState,
+      recentTrades,
+      trades24hCount,
+      marketData,
+      // Calculate 24h volume using SUM directly in database
+      volume24hRaw,
+    ] = await Promise.all([
+      // Active markets count
+      prisma.market.count({
+        where: {
+          status: 0,
+          marketId: { in: VALID_MARKET_IDS_BIGINT }
+        }
       }),
+      // Settled markets count
+      prisma.market.count({
+        where: {
+          status: 2,
+          marketId: { in: VALID_MARKET_IDS_BIGINT }
+        }
+      }),
+      // Total trades count (fast)
+      prisma.trade.count(),
+      // Unique traders count using raw SQL for performance
+      prisma.$queryRaw<[{ count: bigint }]>`SELECT COUNT(DISTINCT trader) as count FROM "Trade"`,
+      // Indexer state
       prisma.indexerState.findUnique({ where: { id: "delphi" } }),
+      // Recent trades (already limited)
       prisma.trade.findMany({
         orderBy: { blockTime: "desc" },
         take: 10,
@@ -33,40 +67,51 @@ export async function GET() {
           impliedProbability: true,
         },
       }),
+      // 24h trades count
+      prisma.trade.count({
+        where: {
+          blockTime: { gte: oneDayAgo }
+        }
+      }),
+      // Get total volume from ALL valid markets
+      prisma.market.findMany({
+        where: { marketId: { in: VALID_MARKET_IDS_BIGINT } },
+        select: { marketId: true, totalVolume: true, totalTrades: true }
+      }),
+      // Calculate 24h volume directly in database (more accurate)
+      prisma.$queryRaw<[{ total_volume: string | null, buy_count: string, sell_count: string }]>`
+        SELECT 
+          COALESCE(SUM(ABS(CAST("tokensDelta" AS NUMERIC))), 0)::TEXT as total_volume,
+          COUNT(*) FILTER (WHERE "isBuy" = true)::TEXT as buy_count,
+          COUNT(*) FILTER (WHERE "isBuy" = false)::TEXT as sell_count
+        FROM "Trade" 
+        WHERE "blockTime" >= ${oneDayAgo}
+      `,
     ]);
 
-    // Calculate stats
+    // Calculate total volume from pre-computed market volumes
     let totalVolume = 0n;
-    const uniqueTraders = new Set<string>();
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    let volume24h = 0n;
-    let trades24h = 0;
-    let buys24h = 0;
-    let sells24h = 0;
-
-    for (const t of allTrades) {
-      const tokens = BigInt(t.tokensDelta);
-      const absTokens = tokens < 0n ? -tokens : tokens;
-      totalVolume += absTokens;
-      uniqueTraders.add(t.trader);
-
-      if (t.blockTime && t.blockTime >= oneDayAgo) {
-        volume24h += absTokens;
-        trades24h++;
-        if (t.isBuy) buys24h++;
-        else sells24h++;
+    for (const m of marketData) {
+      if (m.totalVolume) {
+        totalVolume += BigInt(m.totalVolume);
       }
     }
 
-    return NextResponse.json({
-      totalTrades: allTrades.length,
+    // Parse 24h volume from database query result
+    const volume24hResult = volume24hRaw[0];
+    const volume24h = BigInt(volume24hResult?.total_volume || "0");
+    const buys24h = parseInt(volume24hResult?.buy_count || "0", 10);
+    const sells24h = parseInt(volume24hResult?.sell_count || "0", 10);
+
+    const stats = {
+      totalTrades: totalTradesCount,
       totalMarkets: activeCount + settledCount,
       activeMarkets: activeCount,
       settledMarkets: settledCount,
-      uniqueTraders: uniqueTraders.size,
+      uniqueTraders: Number(uniqueTradersCount[0]?.count || 0),
       totalVolume: totalVolume.toString(),
       totalVolumeFormatted: formatVolume(totalVolume),
-      trades24h,
+      trades24h: trades24hCount,
       volume24h: volume24h.toString(),
       volume24hFormatted: formatVolume(volume24h),
       buys24h,
@@ -84,7 +129,19 @@ export async function GET() {
         modelIdx: t.modelIdx.toString(),
         impliedProbability: t.impliedProbability,
       })),
-    });
+      // Include per-market volumes for debugging
+      marketVolumes: marketData.map(m => ({
+        marketId: m.marketId.toString(),
+        volume: m.totalVolume || "0",
+        trades: m.totalTrades || 0,
+      })),
+    };
+
+    // Cache the result
+    cachedStats = stats;
+    cacheTime = Date.now();
+
+    return NextResponse.json(stats);
   } catch (error) {
     console.error("Stats error:", error);
     return NextResponse.json({ error: "Failed to fetch stats" }, { status: 500 });

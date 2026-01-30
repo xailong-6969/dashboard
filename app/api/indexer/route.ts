@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const secret = url.searchParams.get("secret");
   const action = url.searchParams.get("action") || "index";
-  
+
   // Check authorization
   if (secret !== INDEXER_SECRET) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -28,6 +28,12 @@ export async function GET(req: Request) {
             console.log(`Progress: ${current}/${target}`);
           },
         });
+
+        // Update market volumes if new trades were indexed
+        if (result.indexed > 0) {
+          await updateMarketVolumes(prisma);
+        }
+
         return NextResponse.json({
           success: true,
           action: "index",
@@ -45,6 +51,27 @@ export async function GET(req: Request) {
         });
       }
 
+      case "update-volumes": {
+        // Force update all market volumes
+        console.log("📈 Force updating market volumes...");
+        await updateMarketVolumes(prisma);
+
+        // Return updated volumes
+        const markets = await prisma.market.findMany({
+          select: { marketId: true, totalVolume: true, totalTrades: true }
+        });
+
+        return NextResponse.json({
+          success: true,
+          action: "update-volumes",
+          markets: markets.map(m => ({
+            marketId: m.marketId.toString(),
+            volume: m.totalVolume,
+            trades: m.totalTrades
+          }))
+        });
+      }
+
       case "status": {
         // Get indexer status
         const state = await prisma.indexerState.findUnique({
@@ -52,7 +79,7 @@ export async function GET(req: Request) {
         });
         const tradeCount = await prisma.trade.count();
         const marketCount = await prisma.market.count();
-        
+
         return NextResponse.json({
           success: true,
           state,
@@ -78,12 +105,18 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
     const secret = body.secret || req.headers.get("x-indexer-secret");
-    
+
     if (secret !== INDEXER_SECRET) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const result = await runIndexer(prisma, { batchSize: 50 });
+
+    // Update market volumes if new trades were indexed
+    if (result.indexed > 0) {
+      await updateMarketVolumes(prisma);
+    }
+
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
     console.error("Indexer POST error:", error);

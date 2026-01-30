@@ -139,9 +139,12 @@ body {
   }
 
   @keyframes pulse-live {
-    0%, 100% {
+
+    0%,
+    100% {
       opacity: 1;
     }
+
     50% {
       opacity: 0.5;
     }
@@ -149,12 +152,10 @@ body {
 
   /* Skeleton loading */
   .skeleton {
-    background: linear-gradient(
-      90deg,
-      var(--bg-card) 25%,
-      var(--bg-secondary) 50%,
-      var(--bg-card) 75%
-    );
+    background: linear-gradient(90deg,
+        var(--bg-card) 25%,
+        var(--bg-secondary) 50%,
+        var(--bg-card) 75%);
     background-size: 200% 100%;
     animation: skeleton-loading 1.5s infinite;
   }
@@ -163,9 +164,103 @@ body {
     0% {
       background-position: 200% 0;
     }
+
     100% {
       background-position: -200% 0;
     }
+  }
+
+  /* ===== SCROLL SNAP ===== */
+  .snap-y {
+    scroll-snap-type: y mandatory;
+  }
+
+  .snap-x {
+    scroll-snap-type: x mandatory;
+  }
+
+  .snap-mandatory {
+    scroll-snap-type: y mandatory;
+  }
+
+  .snap-start {
+    scroll-snap-align: start;
+  }
+
+  .snap-center {
+    scroll-snap-align: center;
+  }
+
+  .snap-always {
+    scroll-snap-stop: always;
+  }
+
+  /* ===== CUSTOM SCROLLBAR ===== */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scrollbar-track-transparent::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thumb-zinc-700::-webkit-scrollbar-thumb {
+    background: #3f3f46;
+    border-radius: 3px;
+  }
+
+  .hover\:scrollbar-thumb-zinc-600:hover::-webkit-scrollbar-thumb {
+    background: #52525b;
+  }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ===== MOBILE RESPONSIVE ===== */
+  @media (max-width: 768px) {
+    .snap-y {
+      scroll-snap-type: y proximity;
+    }
+  }
+
+  /* Touch friendly tap targets */
+  @media (pointer: coarse) {
+    .touch-target {
+      min-height: 44px;
+      min-width: 44px;
+    }
+  }
+
+  /* Reduce motion for accessibility */
+  @media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  /* Full-page section base */
+  .section-full {
+    min-height: 100vh;
+    min-height: 100dvh;
+    /* Dynamic viewport height for mobile */
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
   }
 }
 
@@ -185,4 +280,60 @@ body {
 #__next-build-watcher,
 #__next-prerender-indicator {
   display: none !important;
+}
+
+/* Countdown Timer Styles */
+.countdown-timer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.countdown-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.countdown-label {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.countdown-values {
+  display: flex;
+  gap: 4px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.countdown-segment {
+  display: flex;
+  align-items: baseline;
+}
+
+.countdown-number {
+  color: #10b981;
+  font-weight: 600;
+  font-size: 1.125rem;
+}
+
+.countdown-unit {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-left: 2px;
+}
+
+.countdown-local-time {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.countdown-expired .countdown-status {
+  color: var(--accent-purple);
+  font-weight: 500;
+}
+
+.countdown-loading {
+  color: var(--text-muted);
+  font-size: 0.875rem;
 }

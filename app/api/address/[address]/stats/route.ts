@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getAddress } from "viem";
+import { MARKET_WINNERS } from "@/lib/markets-config";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +14,7 @@ export async function GET(
   { params }: { params: Promise<{ address: string }> }
 ) {
   const { address: rawAddress } = await params;
-  
+
   if (!rawAddress || !isHexAddress(rawAddress)) {
     return NextResponse.json({ error: "Invalid address" }, { status: 400 });
   }
@@ -70,13 +71,16 @@ export async function GET(
       } else {
         sellCount++;
         sellVolume += tokens;
+        const absTokens = tokens < 0n ? -tokens : tokens;
+        const absShares = shares < 0n ? -shares : shares;
         if (pos.shares > 0n) {
-          const avgCost = pos.cost / pos.shares;
-          const costRemoved = avgCost * shares;
-          const pnl = tokens - costRemoved;
+          // Use same precision as leaderboard: scale up by 1e18 before dividing
+          const avgCost = (pos.cost * BigInt(1e18)) / pos.shares;
+          const costRemoved = (avgCost * absShares) / BigInt(1e18);
+          const pnl = absTokens - costRemoved;
           pos.realized += pnl;
           totalRealizedPnl += pnl;
-          pos.shares -= shares;
+          pos.shares -= absShares;
           pos.cost = pos.cost > costRemoved ? pos.cost - costRemoved : 0n;
         } else {
           pos.realized += tokens;
@@ -86,13 +90,30 @@ export async function GET(
       positions.set(posKey, pos);
     }
 
-    // Count open positions
+    // Count open positions and add settlement P&L for settled markets
     let openPositions = 0;
     let unrealizedCostBasis = 0n;
-    for (const pos of positions.values()) {
+
+    for (const [posKey, pos] of positions.entries()) {
       if (pos.shares > 0n) {
-        openPositions++;
-        unrealizedCostBasis += pos.cost;
+        const [marketId, modelIdx] = posKey.split(":");
+        const winnerIdx = MARKET_WINNERS[marketId];
+
+        // Check if this market is settled
+        if (winnerIdx !== undefined) {
+          // Market is settled - add settlement P&L
+          if (Number(modelIdx) === winnerIdx) {
+            // Won: receive shares back minus cost
+            totalRealizedPnl += pos.shares - pos.cost;
+          } else {
+            // Lost: lose the cost basis
+            totalRealizedPnl -= pos.cost;
+          }
+        } else {
+          // Market not settled - count as open position
+          openPositions++;
+          unrealizedCostBasis += pos.cost;
+        }
       }
     }
 

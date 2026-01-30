@@ -1,12 +1,13 @@
 // Market Configuration
 
 export interface MarketConfig {
-  internalId: string;     
-  displayId: string;       
+  internalId: string;
+  displayId: string;
   title: string;
   status: "active" | "settled";
   winnerIdx?: number;
-  endDate: string;
+  endDate: string;           // Display format like "Jan 30"
+  endTimestamp?: string;     // ISO timestamp for countdown: "2026-01-30T17:40:00Z"
   models: Array<{
     idx: number;
     name: string;
@@ -52,6 +53,7 @@ export const MARKETS: Record<string, MarketConfig> = {
     title: "Gensyn Lightweight General Reasoning Benchmark",
     status: "active",
     endDate: "Jan 30",
+    endTimestamp: "2026-01-30T17:40:00Z",  // Jan 30, 2026 5:40 PM UTC = 11:10 PM IST
     models: [
       { idx: 0, name: "QWEN/QWEN3-8B", family: "QWEN" },
       { idx: 1, name: "MISTRALAI/MINISTRAL-3B-2412", family: "MISTRALAI" },
@@ -94,3 +96,33 @@ export const MARKET_WINNERS: Record<string, number> = {
   "0": 0,
   "1": 0,
 };
+
+// Check if a market has ended based on endTimestamp
+export function hasMarketEnded(marketId: string): boolean {
+  const market = MARKETS[marketId];
+  if (!market) return false;
+
+  // If already settled, it's ended
+  if (market.status === "settled") return true;
+
+  // If has endTimestamp, check if current time is past it
+  if (market.endTimestamp) {
+    return new Date() > new Date(market.endTimestamp);
+  }
+
+  return false;
+}
+
+// Get effective status (considering endTimestamp)
+export function getEffectiveStatus(marketId: string): "active" | "ended" | "settled" {
+  const market = MARKETS[marketId];
+  if (!market) return "active";
+
+  if (market.status === "settled") return "settled";
+
+  if (market.endTimestamp && new Date() > new Date(market.endTimestamp)) {
+    return "ended";  // Timer expired but not yet settled (winner not announced)
+  }
+
+  return "active";
+}

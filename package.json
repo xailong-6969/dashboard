@@ -6,6 +6,7 @@
     "dev": "next dev --port 3000",
     "build": "prisma generate && next build",
     "start": "next start --port 3000",
+    "start:prod": "node scripts/volume-scheduler.js & next start --port 3000",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate deploy",
