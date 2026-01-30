@@ -7,7 +7,11 @@ export const metadata: Metadata = {
   title: "Delphi Analytics | Gensyn Testnet",
   description: "Track prediction markets, analyze trading patterns, and view P&L for Delphi on Gensyn Testnet.",
   icons: {
-    icon: "/favicon.ico",
+    icon: [
+      { url: "/favicon.ico" },
+      { url: "/bat-logo.png", type: "image/png" },
+    ],
+    apple: "/bat-logo.png",
   },
 };
 
