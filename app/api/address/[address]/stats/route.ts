@@ -41,13 +41,15 @@ export async function GET(
       },
     });
 
-    // Calculate stats - same logic as leaderboard for consistency
+    // Calculate stats using INDEXER's exact formula:
+    // P&L = totalReceived + settlementPayout - totalSpent
     let totalVolume = 0n;
     let buyVolume = 0n;
     let sellVolume = 0n;
     let buyCount = 0;
     let sellCount = 0;
-    let realizedPnl = 0n;
+    let totalSpent = 0n;
+    let totalReceived = 0n;
 
     const marketsTraded = new Set<string>();
     const modelsTraded = new Set<string>();
@@ -57,7 +59,6 @@ export async function GET(
       const tokens = BigInt(trade.tokensDelta);
       const shares = BigInt(trade.sharesDelta);
       const absTokens = tokens < 0n ? -tokens : tokens;
-      const absShares = shares < 0n ? -shares : shares;
 
       totalVolume += absTokens;
       marketsTraded.add(trade.marketId.toString());
@@ -69,49 +70,38 @@ export async function GET(
       if (trade.isBuy) {
         buyCount++;
         buyVolume += absTokens;
-        pos.shares += absShares;
+        totalSpent += absTokens;
+        pos.shares += shares;
         pos.cost += absTokens;
       } else {
         sellCount++;
         sellVolume += absTokens;
+        totalReceived += absTokens;
+        // Reduce shares - same logic as indexer
         if (pos.shares > 0n) {
-          const avgCost = (pos.cost * BigInt(1e18)) / pos.shares;
-          const costBasis = (avgCost * absShares) / BigInt(1e18);
-          const pnl = absTokens - costBasis;
-          realizedPnl += pnl;
-
-          pos.shares -= absShares;
-          pos.cost -= costBasis;
-          if (pos.shares < 0n) pos.shares = 0n;
-          if (pos.cost < 0n) pos.cost = 0n;
-        } else {
-          realizedPnl += absTokens;
+          const sharesToRemove = shares > pos.shares ? pos.shares : shares;
+          pos.shares -= sharesToRemove;
         }
       }
       positions.set(posKey, pos);
     }
 
-    // Add settlement P&L - same logic as leaderboard
+    // Calculate settlement P&L
+    let settlementPayout = 0n;
     let openPositions = 0;
     let unrealizedCostBasis = 0n;
-    let totalCostBasis = 0n;
-
-    for (const pos of positions.values()) {
-      totalCostBasis += pos.cost;
-    }
 
     for (const [posKey, pos] of positions.entries()) {
-      if (pos.shares > 0n) {
-        const [marketId, modelIdx] = posKey.split(":");
-        const winnerIdx = MARKET_WINNERS[marketId];
+      const [marketId, modelIdx] = posKey.split(":");
+      const winnerIdx = MARKET_WINNERS[marketId];
 
+      if (pos.shares > 0n) {
         if (winnerIdx !== undefined) {
-          // Market is settled
-          if (Number(modelIdx) === winnerIdx) {
-            realizedPnl += pos.shares - pos.cost;
-          } else {
-            realizedPnl -= pos.cost;
+          // Market is settled - add settlement payout for winning shares
+          if (winnerIdx.toString() === modelIdx) {
+            settlementPayout += pos.shares;
           }
+          // Losing shares get 0, no action needed
         } else {
           // Market not settled
           openPositions++;
@@ -119,6 +109,9 @@ export async function GET(
         }
       }
     }
+
+    // P&L = totalReceived + settlementPayout - totalSpent
+    const realizedPnl = totalReceived + settlementPayout - totalSpent;
 
     return NextResponse.json({
       address,
@@ -132,7 +125,7 @@ export async function GET(
       modelsTraded: modelsTraded.size,
       openPositions,
       realizedPnl: realizedPnl.toString(),
-      totalCostBasis: totalCostBasis.toString(),
+      totalCostBasis: totalSpent.toString(),
       unrealizedCostBasis: unrealizedCostBasis.toString(),
       firstTrade: trades[0]?.blockTime || null,
       lastTrade: trades[trades.length - 1]?.blockTime || null,

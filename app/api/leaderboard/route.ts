@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
     const sortBy = searchParams.get("sortBy") || "pnl";
     const search = searchParams.get("search")?.toLowerCase();
 
-    // Get ALL trades for valid markets - MUST order by blockTime for correct P&L
+    // Get ALL trades for valid markets - MUST order by blockTime
     const allTrades = await prisma.trade.findMany({
       where: { marketId: { in: VALID_MARKET_IDS_BIGINT } },
       select: {
@@ -28,10 +28,12 @@ export async function GET(request: NextRequest) {
       orderBy: { blockTime: "asc" },
     });
 
-    // Calculate stats per trader
+    // Calculate stats per trader using INDEXER's exact formula:
+    // P&L = totalReceived + settlementPayout - totalSpent
     const traderStats = new Map<string, {
       address: string;
-      realizedPnl: bigint;
+      totalSpent: bigint;
+      totalReceived: bigint;
       totalVolume: bigint;
       totalTrades: number;
       positions: Map<string, { shares: bigint; cost: bigint }>;
@@ -44,7 +46,8 @@ export async function GET(request: NextRequest) {
       if (!stats) {
         stats = {
           address: trade.trader,
-          realizedPnl: 0n,
+          totalSpent: 0n,
+          totalReceived: 0n,
           totalVolume: 0n,
           totalTrades: 0,
           positions: new Map(),
@@ -55,7 +58,6 @@ export async function GET(request: NextRequest) {
       const tokens = BigInt(trade.tokensDelta);
       const shares = BigInt(trade.sharesDelta);
       const absTokens = tokens < 0n ? -tokens : tokens;
-      const absShares = shares < 0n ? -shares : shares;
 
       stats.totalVolume += absTokens;
       stats.totalTrades += 1;
@@ -64,52 +66,46 @@ export async function GET(request: NextRequest) {
       let pos = stats.positions.get(posKey) || { shares: 0n, cost: 0n };
 
       if (trade.isBuy) {
-        pos.shares += absShares;
+        stats.totalSpent += absTokens;
+        pos.shares += shares;
         pos.cost += absTokens;
       } else {
+        stats.totalReceived += absTokens;
+        // Reduce shares - use same logic as indexer
         if (pos.shares > 0n) {
-          const avgCost = (pos.cost * BigInt(1e18)) / pos.shares;
-          const costBasis = (avgCost * absShares) / BigInt(1e18);
-          const pnl = absTokens - costBasis;
-          stats.realizedPnl += pnl;
-
-          pos.shares -= absShares;
-          pos.cost -= costBasis;
-          if (pos.shares < 0n) pos.shares = 0n;
-          if (pos.cost < 0n) pos.cost = 0n;
-        } else {
-          stats.realizedPnl += absTokens;
+          const sharesToRemove = shares > pos.shares ? pos.shares : shares;
+          pos.shares -= sharesToRemove;
         }
       }
 
       stats.positions.set(posKey, pos);
     }
 
-    // Add settlement P&L
-    for (const [, stats] of traderStats) {
-      for (const [posKey, pos] of stats.positions) {
-        if (pos.shares > 0n) {
-          const [marketId, modelIdx] = posKey.split(":");
-          const winnerIdx = MARKET_WINNERS[marketId];
+    // Calculate P&L with settlement
+    let traders = Array.from(traderStats.values()).map(stats => {
+      let settlementPayout = 0n;
 
-          if (winnerIdx !== undefined) {
-            if (Number(modelIdx) === winnerIdx) {
-              stats.realizedPnl += pos.shares - pos.cost;
-            } else {
-              stats.realizedPnl -= pos.cost;
-            }
-          }
+      // Add settlement payout for winning positions
+      for (const [posKey, pos] of stats.positions.entries()) {
+        const [marketIdStr, modelIdxStr] = posKey.split(":");
+        const winnerIdx = MARKET_WINNERS[marketIdStr];
+
+        // If market is settled and trader holds winning shares
+        if (winnerIdx !== undefined && winnerIdx.toString() === modelIdxStr) {
+          settlementPayout += pos.shares;
         }
       }
-    }
 
-    // Convert to array
-    let traders = Array.from(traderStats.values()).map(t => ({
-      address: t.address,
-      realizedPnl: t.realizedPnl.toString(),
-      totalVolume: t.totalVolume.toString(),
-      totalTrades: t.totalTrades,
-    }));
+      // P&L = totalReceived + settlementPayout - totalSpent
+      const realizedPnl = stats.totalReceived + settlementPayout - stats.totalSpent;
+
+      return {
+        address: stats.address,
+        realizedPnl: realizedPnl.toString(),
+        totalVolume: stats.totalVolume.toString(),
+        totalTrades: stats.totalTrades,
+      };
+    });
 
     // Sort ALL traders
     traders.sort((a, b) => {
