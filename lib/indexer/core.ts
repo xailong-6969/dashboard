@@ -336,52 +336,102 @@ export async function runIndexer(
 }
 
 // ============================================
-// RECALCULATE STATS
+// RECALCULATE STATS - with correct P&L calculation
 // ============================================
 export async function recalculateTraderStats(prisma: PrismaClient): Promise<number> {
   const settledMarkets = await prisma.market.findMany({ where: { status: 2, winningModelIdx: { not: null } } });
-  const winningModels = new Map(settledMarkets.map(m => [m.marketId.toString(), m.winningModelIdx!]));
+  const winningModels = new Map(settledMarkets.map(m => [m.marketId.toString(), Number(m.winningModelIdx!)]));
   const traders = await prisma.trade.findMany({ distinct: ['trader'], select: { trader: true } });
   let updated = 0;
 
   for (const { trader } of traders) {
     const trades = await prisma.trade.findMany({ where: { trader }, orderBy: { blockTime: 'asc' } });
-    let totalVolume = 0n, buyCount = 0, sellCount = 0, totalSpent = 0n, totalReceived = 0n;
+    let totalVolume = 0n, buyCount = 0, sellCount = 0;
+    let realizedPnl = 0n;
     const positions = new Map<string, { shares: bigint; cost: bigint }>();
 
     for (const trade of trades) {
-      const tokens = BigInt(trade.tokensDelta), shares = BigInt(trade.sharesDelta);
+      const tokens = BigInt(trade.tokensDelta);
+      const shares = BigInt(trade.sharesDelta);
       const absTokens = tokens < 0n ? -tokens : tokens;
+      const absShares = shares < 0n ? -shares : shares;
       totalVolume += absTokens;
       const key = `${trade.marketId}:${trade.modelIdx}`;
 
       if (trade.isBuy) {
-        buyCount++; totalSpent += absTokens;
+        buyCount++;
         const pos = positions.get(key) || { shares: 0n, cost: 0n };
-        pos.shares += shares; pos.cost += absTokens;
+        pos.shares += absShares;
+        pos.cost += absTokens;
         positions.set(key, pos);
       } else {
-        sellCount++; totalReceived += absTokens;
-        const pos = positions.get(key);
-        if (pos && pos.shares > 0n) { pos.shares -= (shares > pos.shares ? pos.shares : shares); positions.set(key, pos); }
+        sellCount++;
+        const pos = positions.get(key) || { shares: 0n, cost: 0n };
+
+        if (pos.shares > 0n) {
+          // Calculate cost basis for this sell
+          const avgCost = (pos.cost * BigInt(1e18)) / pos.shares;
+          const costBasis = (avgCost * absShares) / BigInt(1e18);
+          const pnl = absTokens - costBasis;
+          realizedPnl += pnl;
+
+          // Update position
+          pos.shares -= absShares;
+          pos.cost -= costBasis;
+          if (pos.shares < 0n) pos.shares = 0n;
+          if (pos.cost < 0n) pos.cost = 0n;
+          positions.set(key, pos);
+        } else {
+          // No position to sell from, treat as pure profit
+          realizedPnl += absTokens;
+        }
       }
     }
 
-    let settlementPayout = 0n;
+    // Add settlement P&L for remaining positions in settled markets
     for (const [key, pos] of positions.entries()) {
-      const [marketIdStr, modelIdxStr] = key.split(':');
-      if (winningModels.get(marketIdStr)?.toString() === modelIdxStr) settlementPayout += pos.shares;
+      if (pos.shares > 0n) {
+        const [marketIdStr, modelIdxStr] = key.split(':');
+        const winnerIdx = winningModels.get(marketIdStr);
+
+        if (winnerIdx !== undefined) {
+          if (Number(modelIdxStr) === winnerIdx) {
+            // Winner: get share value minus cost
+            realizedPnl += pos.shares - pos.cost;
+          } else {
+            // Loser: lose the cost basis
+            realizedPnl -= pos.cost;
+          }
+        }
+      }
     }
 
     await prisma.traderStats.upsert({
       where: { address: trader },
-      update: { totalTrades: trades.length, totalVolume: totalVolume.toString(), buyCount, sellCount, realizedPnl: (totalReceived + settlementPayout - totalSpent).toString(), totalCostBasis: totalSpent.toString(), lastTradeAt: trades[trades.length - 1]?.blockTime },
-      create: { address: trader, totalTrades: trades.length, totalVolume: totalVolume.toString(), buyCount, sellCount, realizedPnl: (totalReceived + settlementPayout - totalSpent).toString(), totalCostBasis: totalSpent.toString(), firstTradeAt: trades[0]?.blockTime, lastTradeAt: trades[trades.length - 1]?.blockTime },
+      update: {
+        totalTrades: trades.length,
+        totalVolume: totalVolume.toString(),
+        buyCount,
+        sellCount,
+        realizedPnl: realizedPnl.toString(),
+        lastTradeAt: trades[trades.length - 1]?.blockTime
+      },
+      create: {
+        address: trader,
+        totalTrades: trades.length,
+        totalVolume: totalVolume.toString(),
+        buyCount,
+        sellCount,
+        realizedPnl: realizedPnl.toString(),
+        firstTradeAt: trades[0]?.blockTime,
+        lastTradeAt: trades[trades.length - 1]?.blockTime
+      },
     });
     updated++;
   }
   return updated;
 }
+
 
 export async function updateMarketVolumes(prisma: PrismaClient): Promise<void> {
   const markets = await prisma.market.findMany({ select: { marketId: true } });
