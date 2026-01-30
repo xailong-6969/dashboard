@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const sortBy = searchParams.get("sortBy") || "pnl";
     const search = searchParams.get("search")?.toLowerCase();
 
-    // Get ALL trades for valid markets
+    // Get ALL trades for valid markets - order by time for consistent P&L
     const allTrades = await prisma.trade.findMany({
       where: { marketId: { in: VALID_MARKET_IDS_BIGINT } },
       select: {
@@ -24,6 +24,7 @@ export async function GET(request: NextRequest) {
         tokensDelta: true,
         sharesDelta: true,
       },
+      orderBy: { blockTime: "asc" },
     });
 
     // Calculate stats per trader
