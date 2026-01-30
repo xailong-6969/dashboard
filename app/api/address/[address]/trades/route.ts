@@ -3,6 +3,8 @@ import prisma from "@/lib/prisma";
 import { getAddress } from "viem";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
+export const revalidate = 600; // Cache for 10 minutes
 
 function isHexAddress(a: string): boolean {
   return /^0x[a-fA-F0-9]{40}$/.test(a);
@@ -13,7 +15,7 @@ export async function GET(
   { params }: { params: Promise<{ address: string }> }
 ) {
   const { address: rawAddress } = await params;
-  
+
   if (!rawAddress || !isHexAddress(rawAddress)) {
     return NextResponse.json({ error: "Invalid address" }, { status: 400 });
   }

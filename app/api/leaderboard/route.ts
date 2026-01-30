@@ -4,6 +4,7 @@ import { VALID_MARKET_IDS_BIGINT, MARKET_WINNERS } from "@/lib/markets-config";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+export const revalidate = 600; // Cache for 10 minutes
 
 export async function GET(request: NextRequest) {
   try {
