@@ -24,12 +24,15 @@ export async function GET(request: NextRequest) {
         tokensDelta: true,
         sharesDelta: true,
       },
+      orderBy: { blockTime: "asc" },
     });
 
-    // Calculate stats per trader
+    // Calculate stats per trader using the correct formula:
+    // P&L = totalReceived + settlementPayout - totalSpent
     const traderStats = new Map<string, {
       address: string;
-      realizedPnl: bigint;
+      totalSpent: bigint;      // Total tokens spent on buys
+      totalReceived: bigint;   // Total tokens received from sells
       totalVolume: bigint;
       totalTrades: number;
       positions: Map<string, { shares: bigint; cost: bigint }>;
@@ -42,7 +45,8 @@ export async function GET(request: NextRequest) {
       if (!stats) {
         stats = {
           address: trade.trader,
-          realizedPnl: 0n,
+          totalSpent: 0n,
+          totalReceived: 0n,
           totalVolume: 0n,
           totalTrades: 0,
           positions: new Map(),
@@ -53,61 +57,55 @@ export async function GET(request: NextRequest) {
       const tokens = BigInt(trade.tokensDelta);
       const shares = BigInt(trade.sharesDelta);
       const absTokens = tokens < 0n ? -tokens : tokens;
-      const absShares = shares < 0n ? -shares : shares;
 
       stats.totalVolume += absTokens;
       stats.totalTrades += 1;
 
       const posKey = `${trade.marketId}:${trade.modelIdx}`;
-      let pos = stats.positions.get(posKey) || { shares: 0n, cost: 0n };
+      const pos = stats.positions.get(posKey) || { shares: 0n, cost: 0n };
 
       if (trade.isBuy) {
-        pos.shares += absShares;
+        stats.totalSpent += absTokens;
+        pos.shares += shares;
         pos.cost += absTokens;
       } else {
+        stats.totalReceived += absTokens;
+        // Reduce shares held (can't go below 0)
         if (pos.shares > 0n) {
-          const avgCost = (pos.cost * BigInt(1e18)) / pos.shares;
-          const costBasis = (avgCost * absShares) / BigInt(1e18);
-          const pnl = absTokens - costBasis;
-          stats.realizedPnl += pnl;
-
-          pos.shares -= absShares;
-          pos.cost -= costBasis;
-          if (pos.shares < 0n) pos.shares = 0n;
-          if (pos.cost < 0n) pos.cost = 0n;
-        } else {
-          stats.realizedPnl += absTokens;
+          pos.shares -= shares > pos.shares ? pos.shares : shares;
         }
       }
 
       stats.positions.set(posKey, pos);
     }
 
-    // Add settlement P&L
-    for (const [, stats] of traderStats) {
-      for (const [posKey, pos] of stats.positions) {
-        if (pos.shares > 0n) {
-          const [marketId, modelIdx] = posKey.split(":");
-          const winnerIdx = MARKET_WINNERS[marketId];
+    // Convert to array with P&L calculation
+    let traders = Array.from(traderStats.values()).map(stats => {
+      // Calculate settlement payout for positions in settled markets
+      let settlementPayout = 0n;
 
-          if (winnerIdx !== undefined) {
-            if (Number(modelIdx) === winnerIdx) {
-              stats.realizedPnl += pos.shares - pos.cost;
-            } else {
-              stats.realizedPnl -= pos.cost;
-            }
+      for (const [posKey, pos] of stats.positions.entries()) {
+        if (pos.shares > 0n) {
+          const [marketIdStr, modelIdxStr] = posKey.split(":");
+          const winnerIdx = MARKET_WINNERS[marketIdStr];
+
+          // If this market is settled and trader holds winning shares
+          if (winnerIdx !== undefined && winnerIdx.toString() === modelIdxStr) {
+            settlementPayout += pos.shares;
           }
         }
       }
-    }
 
-    // Convert to array
-    let traders = Array.from(traderStats.values()).map(t => ({
-      address: t.address,
-      realizedPnl: t.realizedPnl.toString(),
-      totalVolume: t.totalVolume.toString(),
-      totalTrades: t.totalTrades,
-    }));
+      // P&L = totalReceived + settlementPayout - totalSpent
+      const realizedPnl = stats.totalReceived + settlementPayout - stats.totalSpent;
+
+      return {
+        address: stats.address,
+        realizedPnl: realizedPnl.toString(),
+        totalVolume: stats.totalVolume.toString(),
+        totalTrades: stats.totalTrades,
+      };
+    });
 
     // Sort ALL traders using proper numeric comparison
     traders.sort((a, b) => {
