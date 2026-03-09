@@ -5,6 +5,7 @@
 // - Called by CRON, not by page loads
 
 import { PrismaClient } from "@prisma/client";
+import { VALID_MARKET_IDS } from "@/lib/markets-config";
 
 const DELPHI_API_BASE = "https://delphi.gensyn.ai/api";
 
@@ -244,8 +245,10 @@ export async function discoverAndCacheModels(
     for (const id of settledMarkets.keys()) {
       marketIdsToProcess.add(id);
     }
-    // Known active markets
-    marketIdsToProcess.add("3");
+    // Known markets from config (ensures all configured markets are always processed)
+    for (const id of VALID_MARKET_IDS) {
+      marketIdsToProcess.add(id);
+    }
 
     log(`📊 Processing ${marketIdsToProcess.size} markets`);
 
