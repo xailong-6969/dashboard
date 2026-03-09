@@ -66,9 +66,10 @@ export const MARKETS: Record<string, MarketConfig> = {
     internalId: "4",
     displayId: "4",
     title: "Gensyn Commercial-Fast Reasoning Benchmark",
-    status: "active",
+    status: "settled",
+    winnerIdx: 3,  // grok-4.1-fast-reasoning
     endDate: "Feb 27",
-    endTimestamp: "2026-02-27T19:03:00Z",  // Feb 27, 2026 7:03 PM UTC
+    endTimestamp: "2026-02-27T19:03:00Z",
     models: [
       { idx: 0, name: "CLAUDE-HAIKU-4-5", family: "CLAUDE" },
       { idx: 1, name: "GEMINI-3-FLASH-PREVIEW", family: "GEMINI" },
@@ -76,11 +77,36 @@ export const MARKETS: Record<string, MarketConfig> = {
       { idx: 3, name: "GROK-4.1-FAST-REASONING", family: "GROK" },
     ],
   },
+  "5": {
+    internalId: "5",
+    displayId: "5",
+    title: "Will The Trump Administration Reverse Its Ban On Anthropic In The Federal Government By End Of Week, Sunday March 8 At 11:59 PM UTC?",
+    status: "settled",
+    winnerIdx: 0,  // NO won
+    endDate: "Mar 8",
+    endTimestamp: "2026-03-08T22:39:00Z",
+    models: [
+      { idx: 0, name: "NO", family: "OUTCOME" },
+      { idx: 1, name: "YES", family: "OUTCOME" },
+    ],
+  },
+  "6": {
+    internalId: "6",
+    displayId: "6",
+    title: "Will Timothee Chalamet Win Best Actor At The Oscars On Sunday, March 15th?",
+    status: "active",
+    endDate: "Mar 16",
+    endTimestamp: "2026-03-16T08:41:00Z",
+    models: [
+      { idx: 0, name: "NO", family: "OUTCOME" },
+      { idx: 1, name: "YES", family: "OUTCOME" },
+    ],
+  },
 };
 
 // Valid internal market IDs
-export const VALID_MARKET_IDS = ["0", "1", "3", "4"];
-export const VALID_MARKET_IDS_BIGINT = [0n, 1n, 3n, 4n];
+export const VALID_MARKET_IDS = ["0", "1", "3", "4", "5", "6"];
+export const VALID_MARKET_IDS_BIGINT = [0n, 1n, 3n, 4n, 5n, 6n];
 
 // Get market config by internal ID
 export function getMarketConfig(internalId: string): MarketConfig | null {
@@ -110,6 +136,8 @@ export const MARKET_WINNERS: Record<string, number> = {
   "0": 0,
   "1": 0,
   "3": 1,  // Qwen/Qwen3-8B won
+  "4": 3,  // grok-4.1-fast-reasoning won
+  "5": 0,  // NO won (Trump/Anthropic ban market)
 };
 
 // Check if a market has ended based on endTimestamp
