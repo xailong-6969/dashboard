@@ -78,20 +78,24 @@ export async function GET(
 
       const tokens = BigInt(trade.tokensDelta);
       const shares = BigInt(trade.sharesDelta);
+      const absTokens = tokens < 0n ? -tokens : tokens;
+      const absShares = shares < 0n ? -shares : shares;
       pos.tradeCount++;
 
       if (trade.isBuy) {
-        pos.shares += shares;
-        pos.cost += tokens;
+        pos.shares += absShares;
+        pos.cost += absTokens;
       } else {
         if (pos.shares > 0n) {
-          const avgCost = pos.cost / pos.shares;
-          const costRemoved = avgCost * shares;
-          pos.realized += tokens - costRemoved;
-          pos.shares -= shares;
-          pos.cost = pos.cost > costRemoved ? pos.cost - costRemoved : 0n;
+          const avgCost = (pos.cost * BigInt(1e18)) / pos.shares;
+          const costRemoved = (avgCost * absShares) / BigInt(1e18);
+          pos.realized += absTokens - costRemoved;
+          pos.shares -= absShares;
+          pos.cost -= costRemoved;
+          if (pos.shares < 0n) pos.shares = 0n;
+          if (pos.cost < 0n) pos.cost = 0n;
         } else {
-          pos.realized += tokens;
+          pos.realized += absTokens;
         }
       }
     }

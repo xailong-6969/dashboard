@@ -162,23 +162,27 @@ export function calculatePnL(trades: Array<{
 
     const tokens = BigInt(trade.tokensDelta);
     const shares = BigInt(trade.sharesDelta);
+    const absTokens = tokens < 0n ? -tokens : tokens;
+    const absShares = shares < 0n ? -shares : shares;
 
     if (trade.isBuy) {
-      pos.sharesHeld += shares;
-      pos.costBasis += tokens;
-      totalCostBasis += tokens;
+      pos.sharesHeld += absShares;
+      pos.costBasis += absTokens;
+      totalCostBasis += absTokens;
     } else {
       if (pos.sharesHeld > 0n) {
-        const avgCostPerShare = pos.costBasis / pos.sharesHeld;
-        const costRemoved = avgCostPerShare * shares;
-        const pnl = tokens - costRemoved;
+        const avgCost = (pos.costBasis * BigInt(1e18)) / pos.sharesHeld;
+        const costRemoved = (avgCost * absShares) / BigInt(1e18);
+        const pnl = absTokens - costRemoved;
         pos.realizedPnl += pnl;
         totalRealizedPnl += pnl;
-        pos.sharesHeld -= shares;
-        pos.costBasis = pos.costBasis > costRemoved ? pos.costBasis - costRemoved : 0n;
+        pos.sharesHeld -= absShares;
+        pos.costBasis -= costRemoved;
+        if (pos.sharesHeld < 0n) pos.sharesHeld = 0n;
+        if (pos.costBasis < 0n) pos.costBasis = 0n;
       } else {
-        pos.realizedPnl += tokens;
-        totalRealizedPnl += tokens;
+        pos.realizedPnl += absTokens;
+        totalRealizedPnl += absTokens;
       }
     }
   }
